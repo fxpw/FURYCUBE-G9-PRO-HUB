@@ -1,0 +1,29 @@
+name: Windows build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build HUB and run offline checks
+        shell: cmd
+        run: build.cmd
+      - name: Package own applications
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: FURYCUBE-G9-PRO-HUB-Windows-x64
+          path: |
+            bin/FURYCUBE-G9-PRO-HUB.exe
+            bin/G9Device.exe
+            Run-Hub.cmd
+            README.md
+            LICENSE
+          if-no-files-found: error

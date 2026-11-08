@@ -1,0 +1,11 @@
+LIBRARY hidapi
+EXPORTS
+ _hid_init@0=_ApiInit@0
+ _hid_enumerate@8=_ApiEnumerate@8
+ _hid_free_enumeration@4=_ApiFree@4
+ _hid_open_path@4=_ApiOpen@4
+ _hid_set_nonblocking@8=_ApiNonblock@8
+ _hid_read@12=_ApiRead@12
+ _hid_write@12=_ApiWrite@12
+ _hid_send_feature_report@12=_ApiSend@12
+ _hid_get_feature_report@12=_ApiGet@12

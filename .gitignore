@@ -1,0 +1,18 @@
+evidence/
+portable-hub/
+bin/
+patch-output/
+dist/
+tools/pyenv/
+*.obj
+*.pdb
+*.lib
+*.exp
+tools/__pycache__/
+*.pyc
+# Machine-specific keyboard-filter experiments are kept locally for recovery.
+src/KeyboardFilterProbe.cs
+tools/Disable-InterceptionKeyboardFilter.ps1
+tools/Restore-KeyboardFilter.ps1
+tools/Test-G9-WithoutKeyboardFilter.ps1
+tools/Sync-ClickProfile.ps1

@@ -1,0 +1,11 @@
+LIBRARY hiddriver_1
+EXPORTS
+ Set_VIDPID=ForwardId
+ Open_DevMonitor=ForwardOpenMonitor
+ Close_DevMonitor=ForwardCloseMonitor
+ Open_FeatureDevice=ForwardOpen
+ Close_FeatureDevice=ForwardClose
+ GetFeature=_TraceGet@8
+ SetFeature=_TraceSet@8
+ Hid_Read=ForwardRead
+ Hid_Write=ForwardWrite
