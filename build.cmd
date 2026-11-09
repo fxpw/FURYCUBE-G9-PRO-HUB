@@ -22,6 +22,16 @@ call tools\build-dpi-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-button-editor-tests.cmd
 if errorlevel 1 exit /b 1
+call tools\build-mouse-settings-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-read-handshake-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-mouse-settings-editor-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-profile-library-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-macro-tests.cmd
+if errorlevel 1 exit /b 1
 call tools\build-firmware-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-firmware-ol3-tests.cmd

@@ -145,23 +145,36 @@ namespace Furycube.G9.Bindings {
             }
             throw new InvalidDataException("Parameters are outside the supported binding range");
         }
-        static byte[] DecodeKeys(byte[] data) {
-            if (data == null || (data.Length != 59 && data.Length != 64) || data[0] != 8 || data[1] != 59 || data[2] != 1) throw new InvalidDataException("Invalid profile-one keymap");
+        static byte[] DecodeKeys(byte[] data, int expectedProfile) {
+            if (expectedProfile < 1 || expectedProfile > 5) throw new ArgumentOutOfRangeException("expectedProfile");
+            if (data == null || (data.Length != 59 && data.Length != 64) || data[0] != 8 || data[1] != 59 || data[2] != expectedProfile) throw new InvalidDataException("Keymap does not match the requested onboard profile");
             int sum = 0; for (int i = 3; i < 57; i++) sum += data[i];
             if (sum != ((data[57] << 8) | data[58])) throw new InvalidDataException("Keymap checksum mismatch");
             byte[] result = new byte[59]; Buffer.BlockCopy(data, 0, result, 0, 59); return result;
         }
         public static void EnsureLeftClick(byte[] keymap) {
-            byte[] data = DecodeKeys(keymap);
+            EnsureLeftClick(keymap, 1);
+        }
+        public static void EnsureLeftClick(byte[] keymap, int expectedProfile) {
+            byte[] data = DecodeKeys(keymap, expectedProfile);
             foreach (var button in buttons) if (button.IsPhysicalButton && data[3 + button.Index * 3] == 2) return;
             throw new InvalidDataException("At least one main physical mouse button must retain Left click");
         }
         public static byte[] WithAssignment(byte[] keymap, int index, byte function, byte param1, byte param2) {
+            return WithAssignment(keymap, index, function, param1, param2, 1);
+        }
+        public static byte[] WithAssignment(byte[] keymap, int index, byte function, byte param1, byte param2, int expectedProfile) {
             if (index < 0 || index >= 18) throw new ArgumentOutOfRangeException("index"); Validate(function, param1, param2);
-            byte[] result = DecodeKeys(keymap); int offset = 3 + index * 3;
+            byte[] result = DecodeKeys(keymap, expectedProfile); int offset = 3 + index * 3;
             result[offset] = function; result[offset + 1] = param1; result[offset + 2] = param2;
             int sum = 0; for (int i = 3; i < 57; i++) sum += result[i]; result[57] = (byte)(sum >> 8); result[58] = (byte)sum;
-            EnsureLeftClick(result); return result;
+            EnsureLeftClick(result, expectedProfile); return result;
+        }
+        public static byte[] RetargetKeymap(byte[] keymap, int targetProfile) {
+            if(targetProfile<1 || targetProfile>5)throw new ArgumentOutOfRangeException("targetProfile");
+            if(keymap==null || keymap.Length<3)throw new InvalidDataException("Missing portable button table");
+            byte[] result=DecodeKeys(keymap,keymap[2]);EnsureLeftClick(result,keymap[2]);
+            result[2]=(byte)targetProfile;return result;
         }
     }
 }

@@ -7,7 +7,12 @@ by the recovery requirement.** See [RECOVERY.md](RECOVERY.md).
 
 This is an offline audit of original files. No new USB command, unfamiliar GET,
 loader transition, flash read/write, or settings change was sent to a mouse.
-The standalone client's send allowlist and device source were not changed.
+The standalone client's send allowlist and device source were not changed by
+that original audit. A later, separately validated configuration implementation
+now includes the known GET04/06/07/0A schemas. A complete wired settings read and
+restoration of one timer have passed; they do not provide arbitrary-address flash
+access or a firmware backup. See [settings parity](SETTINGS-PARITY.md) and
+[readback freshness limits](READ-HANDSHAKE.md).
 Installing a new flash-reading firmware first would be circular: it cannot
 provide the required backup of the original state before installation.
 

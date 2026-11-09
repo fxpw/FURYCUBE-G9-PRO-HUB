@@ -43,7 +43,7 @@ internal sealed class G9MappingSnapshot {
         if (document == null || document.Count != 3 || !document.ContainsKey("profile") || !document.ContainsKey("keymapHex") || !document.ContainsKey("buttons")) throw new InvalidDataException("Неожиданный формат таблицы кнопок.");
         var result = new G9MappingSnapshot { profile = Integer(document,"profile"), keymapHex = document["keymapHex"] as string };
         object[] rows = document["buttons"] as object[];
-        if (result.profile != 1 || rows == null || rows.Length != 18 || result.keymapHex == null || result.keymapHex.Length != 118) throw new InvalidDataException("Неожиданный формат таблицы кнопок.");
+        if (result.profile < 1 || result.profile > 5 || rows == null || rows.Length != 18 || result.keymapHex == null || result.keymapHex.Length != 118) throw new InvalidDataException("Неожиданный формат таблицы кнопок.");
         result.buttons = new G9MappingRow[18];
         for (int i = 0; i < 18; i++) {
             var row = rows[i] as IDictionary<string,object>;
@@ -62,7 +62,7 @@ internal sealed class G9MappingSnapshot {
             if (!IsHex(a) || !IsHex(b)) throw new InvalidDataException("Таблица содержит недопустимые шестнадцатеричные символы.");
             result.Keys[i] = byte.Parse(result.keymapHex.Substring(i * 2, 2), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture);
         }
-        if (result.Keys[0] != 8 || result.Keys[1] != 59 || result.Keys[2] != 1) throw new InvalidDataException("Неверный заголовок таблицы кнопок.");
+        if (result.Keys[0] != 8 || result.Keys[1] != 59 || result.Keys[2] != result.profile) throw new InvalidDataException("Неверный заголовок таблицы кнопок.");
         int sum = 0; for (int i = 3; i < 57; i++) sum += result.Keys[i];
         if (sum != (result.Keys[57] << 8 | result.Keys[58])) throw new InvalidDataException("Контрольная сумма таблицы не совпадает.");
         var seen = new HashSet<int>();
@@ -121,6 +121,7 @@ internal sealed class G9ButtonEditor : UserControl {
     readonly CheckBox reserved = new CheckBox { Text = "Показать резервные слоты", AutoSize = true, Dock = DockStyle.Bottom };
     readonly ToolTip tips = new ToolTip();
     G9MappingSnapshot snapshot;
+    internal event EventHandler MappingChanged;
     bool changing, busy;
 
     sealed class Item {
@@ -168,7 +169,7 @@ internal sealed class G9ButtonEditor : UserControl {
         tips.SetToolTip(reserved, "Слоты старого HUB, для которых не подтверждена отдельная физическая кнопка. Текущее значение сохраняется, пока вы его не измените.");
         tips.SetToolTip(apply, "Меняется только выбранное назначение. Перед записью создаётся резервная копия, затем таблица читается повторно.");
         FillButtons(); FillActions(null,true);UpdateApply();
-        status.Text = "Нажмите «Прочитать из мыши». Назначения хранятся в мыши и работают после закрытия HUB. Активная таблица — профиль 1.";
+        status.Text = "Нажмите «Прочитать из мыши». Будет прочитан активный профиль. Назначения хранятся в мыши и работают после закрытия HUB.";
     }
     void FillButtons() {
         int index = SelectedIndex(); changing = true; buttons.Items.Clear();
@@ -250,7 +251,7 @@ internal sealed class G9ButtonEditor : UserControl {
             if (action.ParameterKind == BindingParameterKind.Macro) { byte slot = BindingCatalog.GetMacroSlot(SelectedIndex()); if (slot > 0) parameter.Value = slot; }
             for (int i = 0; i < 8; i++) modifiers[i].Checked = (action.DefaultParam1 & (1 << i)) != 0;
         }
-        help.Text = action.ParameterKind == BindingParameterKind.Macro ? "Назначает уже записанный аппаратный макрос. Редактор последовательностей пока недоступен; выбор слота не создаёт новый макрос. Для кнопки-экрана штатный слот — 13." :
+        help.Text = action.ParameterKind == BindingParameterKind.Macro ? "Назначает уже записанный аппаратный макрос. Создать последовательность можно в редакторе макросов; выбор слота сам по себе её не загружает. Для кнопки-экрана штатный слот — 13." :
             SelectedIndex() == 3 ? "Кнопка 6 — нажимаемый OLED-экран. Выберите действие и запишите его. Проверка прошивки и её исправление доступны отдельно на вкладке диагностики." :
             "Выберите действие и нажмите «Записать в мышь». Остальные назначения сохраняются. Хотя бы одна основная кнопка должна выполнять левый клик.";
         UpdateApply();
@@ -262,7 +263,7 @@ internal sealed class G9ButtonEditor : UserControl {
     }
     async Task LoadMapping() {
         if (busy) return; SetBusy(true); status.Text = "Читаю назначения…";
-        try { snapshot = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping"); })); FillButtons(); status.ForeColor = Color.DarkGreen; status.Text = "Таблица профиля 1 прочитана. Выберите кнопку и действие."; }
+        try { snapshot = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping --active"); })); FillButtons(); status.ForeColor = Color.DarkGreen; status.Text = "Таблица профиля " + snapshot.profile + " прочитана. Выберите кнопку и действие."; }
         catch (Exception error) { snapshot=null;FillButtons();Report(error); }
         finally { SetBusy(false); }
     }
@@ -275,18 +276,24 @@ internal sealed class G9ButtonEditor : UserControl {
                 var key = SelectedKey(); if (key == null) throw new InvalidOperationException("Выберите клавишу.");
                 p1 = 0; for (int i = 0; i < 8; i++) if (modifiers[i].Checked) p1 |= (byte)(1 << i); p2 = key.Usage;
             } else if (action.ParameterKind != BindingParameterKind.None) p2 = (byte)parameter.Value;
-            int index = SelectedIndex(); byte[] expected=BindingCatalog.WithAssignment(snapshot.Keys, index, action.Function, p1, p2);
-            string command = string.Format(CultureInfo.InvariantCulture, "assign --index {0} --function {1:X2} --param1 {2:X2} --param2 {3:X2}", index, action.Function, p1, p2);
+            int index = SelectedIndex(); int profile = snapshot.profile; byte[] expected=BindingCatalog.WithAssignment(snapshot.Keys, index, action.Function, p1, p2, profile);
+            string command = string.Format(CultureInfo.InvariantCulture, "assign --profile {0} --index {1} --function {2:X2} --param1 {3:X2} --param2 {4:X2}", profile, index, action.Function, p1, p2);
             SetBusy(true); status.Text = "Сохраняю назначение и проверяю чтением…";
             await Task.Run(delegate { runDevice(command); });
-            snapshot = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping"); }));
+            snapshot = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping --profile " + profile.ToString(CultureInfo.InvariantCulture)); }));
             snapshot.RequireMatches(expected);
             FillButtons();
             status.ForeColor = Color.DarkGreen; status.Text = "Назначение записано и прочитано обратно. Проверьте действие выбранной кнопки.";
+            if(MappingChanged!=null)MappingChanged(this,EventArgs.Empty);
         } catch (Exception error) { snapshot=null;FillButtons();Report(error); }
         finally { SetBusy(false); }
     }
     void SetBusy(bool value) { busy = value; read.Enabled = !value; buttons.Enabled = reserved.Enabled = categories.Enabled = actions.Enabled = keyboardPanel.Enabled = parameterPanel.Enabled = !value;UpdateApply(); }
+    internal void InvalidateProfile() {
+        snapshot = null; FillButtons(); UpdateApply();
+        status.ForeColor = Color.DarkGoldenrod;
+        status.Text = "Профиль изменён. Прочитайте назначения из мыши перед следующей записью.";
+    }
     void Report(Exception error) { status.ForeColor = Color.DarkRed; status.Text = "Операция остановлена: " + error.Message;if(logger!=null)logger(error.Message); }
     protected override void Dispose(bool disposing) { if (disposing) tips.Dispose(); base.Dispose(disposing); }
 }

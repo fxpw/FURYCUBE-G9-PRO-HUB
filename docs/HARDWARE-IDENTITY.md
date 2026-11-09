@@ -5,6 +5,11 @@ vendor executable launches, bootloader entry, board access or firmware changes.
 
 ## Result
 
+The user confirmed that there is **no FCC ID on the bottom label**. Repeating
+that request is unnecessary. The identifier itself is not mandatory; matching
+the actual controller/PCB and proving independent recovery are what matters.
+See [the updated recovery investigation](RECOVERY-NEXT-STEPS.md).
+
 The manufacturer's G9 PRO page and its firmware package identify the relevant
 product/software family. They do **not** establish the PCB revision, controller
 package marking, service-pad pinout or an independent recovery entry for the

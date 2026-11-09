@@ -38,6 +38,14 @@ internal static class ButtonEditorTests {
         Reject(delegate{G9MappingSnapshot.Parse(Output(Document(wire))+Output(Document(wire)));},"multiple snapshots in one transaction");
         Reject(delegate{G9MappingSnapshot.Parse("MAPPING_JSON {");},"truncated JSON");
         var wrong=Document(wire);wrong["profile"]=2;Reject(delegate{G9MappingSnapshot.Parse(Output(wrong));},"wrong profile");
+        for(int profile=2;profile<=5;profile++) {
+            byte[] other=(byte[])wire.Clone();other[2]=(byte)profile;var document=Document(other);document["profile"]=profile;
+            var table=G9MappingSnapshot.Parse(Output(document));
+            byte[] edited=BindingCatalog.WithAssignment(table.Keys,3,0x11,0,4,profile);
+            Check(table.profile==profile&&edited[2]==profile&&edited[14]==4,"profile "+profile+" assignment stays in the explicitly read profile");
+            int different=profile==5?1:profile+1;
+            Reject(delegate{BindingCatalog.WithAssignment(table.Keys,3,0x11,0,4,different);},"mismatched assignment profile");
+        }
         wrong=Document(wire);wrong["profile"]="1";Reject(delegate{G9MappingSnapshot.Parse(Output(wrong));},"string coerced to profile number");
         wrong=Document(wire);wrong["profile"]=1.1;Reject(delegate{G9MappingSnapshot.Parse(Output(wrong));},"fraction coerced to profile number");
         wrong=Document(wire);wrong["keymapHex"]=" 8"+Captured.Substring(2);Reject(delegate{G9MappingSnapshot.Parse(Output(wrong));},"spaces masquerading as valid hex digits");
@@ -81,6 +89,7 @@ internal static class ButtonEditorTests {
             byte[] invalidMacro=Bytes(Captured);invalidMacro[12]=18;invalidMacro[13]=0;invalidMacro[14]=0;Checksum(invalidMacro);SetSnapshot(editor,invalidMacro);SelectIndex(editor,3);
             Check(Field<ComboBox>(editor,"actions").SelectedIndex==-1&&!apply.Enabled,"unsupported macro slot zero is not silently clamped to slot one");
             Check(calls==0,"constructing and inspecting the editor invokes no device command");
+            editor.InvalidateProfile();Check(Field<G9MappingSnapshot>(editor,"snapshot")==null&&!apply.Enabled,"profile switch invalidates the prior table and blocks writes");
         }
     }
     static KeyboardUsage SelectedKey(G9ButtonEditor editor){return (KeyboardUsage)typeof(G9ButtonEditor).GetMethod("SelectedKey",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(editor,null);}

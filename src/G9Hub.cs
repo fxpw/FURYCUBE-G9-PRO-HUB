@@ -177,6 +177,8 @@ internal sealed class G9Hub : Form {
     readonly object deviceGate = new object();
     G9OledWorker oledWorker;
     readonly G9ScreenEditor screenEditor;
+    readonly G9MouseSettingsEditor settingsEditor;
+    readonly G9ButtonEditor buttonEditor;
     volatile bool closing;
     string preparedDirectory;
     internal G9Hub(string path) {
@@ -189,7 +191,8 @@ internal sealed class G9Hub : Form {
             RunProtocol("inspect"); RunProtocol("profile"); return "Настройки прочитаны. Вывод «0» проверяется нажатием кнопки в поле ввода.";
         }); });
         AddButton(buttons, "Назначить обычную 0", async delegate { await Execute("Записываю обычную «0»…", delegate {
-            RunProtocol("zero"); return "Назначение «0» записано и проверено чтением. Исправление OLED ещё не установлено.";
+            int profile=G9MappingSnapshot.Parse(RunProtocol("mapping --active")).profile;
+            RunProtocol("zero --profile "+profile); return "Назначение «0» записано и проверено чтением. Исправление OLED ещё не установлено.";
         }); });
         AddButton(buttons, "Подготовить исправление", async delegate { await Execute("Готовлю и проверяю локальный патч…", delegate {
             preparedDirectory = G9FirmwarePatch.Prepare(root); Append("Артефакты: " + preparedDirectory);
@@ -205,18 +208,44 @@ internal sealed class G9Hub : Form {
         }); });
         AddButton(buttons, "Открыть папку", delegate { Process.Start(new ProcessStartInfo { FileName = preparedDirectory ?? root, UseShellExecute = true }); });
         AddButton(buttons, "Сохранить назначения", async delegate { await Execute("Сохраняю таблицу кнопок…", delegate {
-            RunProtocol("backup"); return "Копия назначений сохранена. Это копия таблицы кнопок, а не всей прошивки.";
+            int profile=G9MappingSnapshot.Parse(RunProtocol("mapping --active")).profile;
+            RunProtocol("backup --profile "+profile); return "Копия назначений сохранена. Это копия таблицы кнопок, а не всей прошивки.";
         }); });
         AddButton(buttons, "Восстановить назначения…", async delegate {
             using(var dialog=new OpenFileDialog { Filter="Резервная копия назначений|keymap-*.bin|Двоичный файл|*.bin",InitialDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","backups") }) {
                 if(dialog.ShowDialog(this)!=DialogResult.OK)return;
                 string selected=dialog.FileName;
-                await Execute("Восстанавливаю таблицу кнопок…",delegate {RunProtocol("restore \""+selected+"\"");return "Назначения восстановлены и проверены чтением.";});
+                await Execute("Восстанавливаю таблицу кнопок…",delegate {
+                    byte[] bytes=File.ReadAllBytes(selected);if(bytes.Length!=59 || bytes[2]<1 || bytes[2]>5)throw new InvalidDataException("Неверный формат копии назначений.");
+                    RunProtocol("restore \""+selected+"\" --profile "+bytes[2]);return "Назначения восстановлены и проверены чтением.";
+                });
             }
         });
         AddButton(buttons, "Данные мыши", delegate { Append(screenEditor.DescribeMouseTelemetry()); });
+        AddButton(buttons,"Восстановить выбор профиля…",async delegate {
+            using(var dialog=new OpenFileDialog {Filter="Снимок настроек (snapshot.json)|snapshot.json|JSON (*.json)|*.json",InitialDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","backups")}) {
+                if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+                string selected=dialog.FileName;
+                await Execute("Восстанавливаю активный профиль и число профилей…",delegate {RunProtocol("profile-restore --pid 2148 --file \""+selected+"\"");return "Выбор и число профилей восстановлены. Прочитайте настройки мыши заново; содержимое профиля не переписывалось.";});
+                buttonEditor.InvalidateProfile();settingsEditor.InvalidateProfile();
+            }
+        });
+        AddButton(buttons,"Папка резервных копий",delegate {
+            string backupFolder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","backups");Directory.CreateDirectory(backupFolder);
+            Process.Start(new ProcessStartInfo {FileName=backupFolder,UseShellExecute=true});
+        });
         var tabs = new TabControl { Dock = DockStyle.Fill };
-        var assignments = new TabPage("Назначения кнопок"); assignments.Controls.Add(new G9ButtonEditor(RunProtocol, Append));
+        var assignments = new TabPage("Мышь");
+        var mousePages=new TabControl {Dock=DockStyle.Fill};
+        buttonEditor=new G9ButtonEditor(RunProtocol,Append);
+        settingsEditor=new G9MouseSettingsEditor(RunProtocol,Append);
+        settingsEditor.ProfileChanged+=delegate { buttonEditor.InvalidateProfile(); };
+        buttonEditor.MappingChanged+=delegate { settingsEditor.InvalidateProfile(); };
+        var bindingPage=new TabPage("Назначения кнопок");bindingPage.Controls.Add(buttonEditor);
+        var settingsPage=new TabPage("DPI, сенсор и питание");settingsPage.Controls.Add(settingsEditor);
+        mousePages.TabPages.Add(bindingPage);mousePages.TabPages.Add(settingsPage);
+        var macrosPage=new TabPage("Макросы");macrosPage.Controls.Add(new Furycube.G9.Macros.G9MacroEditor(Append));mousePages.TabPages.Add(macrosPage);
+        assignments.Controls.Add(mousePages);
         var mouse = new TabPage("Устройство и прошивка") { Padding=new Padding(8) };
         mouse.Controls.Add(log); mouse.Controls.Add(buttons); mouse.Controls.Add(status); mouse.Controls.Add(description);
         screenEditor=new G9ScreenEditor(Append,SendFrame,ReadRuntimeStatus);
@@ -309,7 +338,8 @@ internal sealed class G9Hub : Form {
             process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) { lock (output) output.AppendLine(e.Data); Append(e.Data); } };
             process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) { lock (errors) errors.AppendLine(e.Data); Append(e.Data); } };
             process.Start(); process.BeginOutputReadLine(); process.BeginErrorReadLine();
-            if (!process.WaitForExit(30000)) { process.Kill(); throw new TimeoutException("Мышь не ответила за 30 секунд; переподключи её перед повторной проверкой."); }
+            int timeout=action.StartsWith("settings-",StringComparison.Ordinal)?45000:30000;
+            if (!process.WaitForExit(timeout)) { process.Kill(); throw new TimeoutException("Мышь не завершила операцию за " + (timeout/1000) + " секунд. Перед следующей записью перечитайте её состояние."); }
             process.WaitForExit();
             if (process.ExitCode == 4) throw new InvalidOperationException("Штатная прошивка не поддерживает передачу кадров OL2. Команды изображения не отправлены; сначала нужен проверенный путь восстановления и установка совместимого расширения.");
             if (process.ExitCode != 0) throw new InvalidOperationException(errors.Length > 0 ? errors.ToString().Trim() : "G9Device завершил операцию с ошибкой; подробности в журнале.");

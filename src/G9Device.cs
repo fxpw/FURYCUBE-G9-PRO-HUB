@@ -10,11 +10,20 @@ using System.Web.Script.Serialization;
 using Microsoft.Win32.SafeHandles;
 using Furycube.G9.Bindings;
 using Furycube.G9.Oled;
+using Furycube.G9.Settings;
 
 // Pure packet checks are shared by the executable and offline fixture tests.
 internal static class G9Wire {
     internal const int KeymapLength = 59;
-    internal static byte[] ReadKeysRequest() { return new byte[] { 0xA0, 8, 59, 0, 1, 0, 0, 0 }; }
+    internal static byte[] ReadKeysRequest() { return ReadKeysRequest(1); }
+    internal static byte[] ReadKeysRequest(int profile) { return ReadSettingsRequest(8, profile); }
+    internal static void ValidateProfileNumber(int profile) { Require(profile >= 1 && profile <= 5, "G9 profile must be1..5"); }
+    internal static int SettingsReadLength(byte report) {
+        switch (report) { case 4:return 52; case 6:return 9; case 7:return 8; case 8:return 59; case 0x0A:return 120; case 0x0C:return 8; default:throw new InvalidDataException("Unsupported settings read report"); }
+    }
+    internal static byte[] ReadSettingsRequest(byte report, int profile) {
+        ValidateProfileNumber(profile); return new byte[] { 0xA0, report, (byte)SettingsReadLength(report), 0, (byte)profile, 0, 0, 0 };
+    }
     internal static byte[] ReadProfileRequest() { return new byte[] { 0xA0, 12, 8, 0, 1, 0, 0, 0 }; }
     internal static byte[] ReadFirmwareRequest() { return new byte[] { 0xA0, 11, 8, 0, 1, 0, 0, 0 }; }
     internal static byte[] SelectProfileOne() { return new byte[] { 12, 10, 1, 0xFE, 1, 0xFE, 0, 0, 0, 0 }; }
@@ -24,9 +33,11 @@ internal static class G9Wire {
             ready ? "Keymap/profile read was not granted" : "A previous read is pending; reconnect the mouse before retrying");
         for (int i = 2; i < 8; i++) Require(data[i] == 0, "Unexpected read-state response");
     }
-    internal static byte[] DecodeKeys(byte[] data) {
+    internal static byte[] DecodeKeys(byte[] data) { return DecodeKeys(data, 1); }
+    internal static byte[] DecodeKeys(byte[] data, int expectedProfile) {
+        ValidateProfileNumber(expectedProfile);
         Require(data != null && (data.Length == 59 || data.Length == 64), "Unexpected keymap transfer length");
-        Require(data[0] == 8 && data[1] == 59 && data[2] == 1, "Unexpected keymap report, length or profile; no settings accepted");
+        Require(data[0] == 8 && data[1] == 59 && data[2] == expectedProfile, "Unexpected keymap report, length or profile; no settings accepted");
         int sum = 0; for (int i = 3; i < 57; i++) sum += data[i];
         Require(sum == ((data[57] << 8) | data[58]), "Keymap checksum mismatch");
         byte[] result = new byte[59]; Buffer.BlockCopy(data, 0, result, 0, result.Length); return result;
@@ -40,15 +51,36 @@ internal static class G9Wire {
     internal static byte[] DecodeProfile(byte[] data) {
         Require(data != null && data.Length == 8 && data[0] == 12 && data[1] == 8 && data[2] == 1,
             "Unexpected active-profile report, length or selector");
-        Require(data[3] > 0 && data[3] <= 8 && data[5] > 0 && data[5] <= 8 &&
+        Require(data[3] > 0 && data[3] <= 5 && data[5] > 0 && data[5] <= 5 &&
             (data[3] ^ data[4]) == 255 && (data[5] ^ data[6]) == 255, "Invalid active-profile complement bytes");
         return new byte[] { data[3], data[5] };
     }
     internal static void ValidateSend(byte[] data) {
         Require(data != null, "Packet missing");
-        if (data.Length == 59 && data[0] == 8) { DecodeKeys(data); return; }
-        if (Equal(data, ReadKeysRequest()) || Equal(data, ReadProfileRequest()) || Equal(data, ReadFirmwareRequest()) || Equal(data, SelectProfileOne())) return;
+        if (data.Length == 59 && data[0] == 8) { DecodeKeys(data, data[2]); return; }
+        if (Equal(data, ReadFirmwareRequest())) return;
+        if (data.Length == 8 && data[0] == 0xA0 && data[3] == 0 && data[4] >= 1 && data[4] <= 5 && data[5] == 0 && data[6] == 0 && data[7] == 0) {
+            if (Equal(data, ReadSettingsRequest(data[1], data[4]))) return;
+        }
+        if (data.Length >= 3 && (data[0] == 4 || data[0] == 5 || data[0] == 6)) {
+            try { MouseSettingsCodec.ValidateSetPacket(data, data[2]); return; }
+            catch (Exception error) { throw new InvalidDataException("Invalid settings write packet", error); }
+        }
+        if ((data.Length == 8 || data.Length == 10) && data[0] == 12 && data[1] == data.Length) {
+            DecodeProfileSet(data); return;
+        }
         throw new InvalidDataException("Command is not permitted by the G9 configuration transport");
+    }
+    internal static byte[] BuildProfileSet(int active, int maximum) {
+        ValidateProfileNumber(active); ValidateProfileNumber(maximum); Require(active <= maximum, "Active profile exceeds the configured profile count");
+        return new byte[] { 12, 10, (byte)active, (byte)(active ^ 255), (byte)maximum, (byte)(maximum ^ 255), 0, 0, 0, 0 };
+    }
+    internal static byte[] DecodeProfileSet(byte[] frame) {
+        Require(frame != null && (frame.Length == 8 || frame.Length == 10) && frame[0] == 12 && frame[1] == frame.Length, "Invalid profile-setting frame");
+        ValidateProfileNumber(frame[2]); ValidateProfileNumber(frame[4]);
+        Require(frame[2] <= frame[4] && (frame[2] ^ frame[3]) == 255 && (frame[4] ^ frame[5]) == 255, "Invalid profile-setting complement or profile count");
+        for (int i = 6; i < frame.Length; i++) Require(frame[i] == 0, "Unexpected profile-setting padding");
+        return new byte[] { frame[2], frame[4] };
     }
     internal static byte[] DecodeFirmware(byte[] data) {
         Require(data != null && data.Length == 8 && data[0] == 11 && (data[1] == 5 || data[1] == 8) && data[2] == 1,
@@ -138,7 +170,7 @@ internal static class G9Hid {
     }
 }
 
-internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRuntimeStatusDeviceSession {
+internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRuntimeStatusDeviceSession, IG9SettingsSession {
     readonly SafeFileHandle handle;
     readonly object oledGate = new object();
     bool oledAuthorized, oledRuntimeStatusAuthorized;
@@ -168,15 +200,51 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
         Console.WriteLine("SEND len={0} data={1}", packet.Length, G9Wire.Hex(packet));
     }
     byte[] Read(byte[] request, byte report, int length) {
-        G9Wire.ValidateAck(Get(0xA0, 8), false); Thread.Sleep(100);
-        Send(request); Thread.Sleep(500);
-        G9Wire.ValidateAck(Get(0xA0, 8), true); Thread.Sleep(100);
+        Furycube.G9.Protocol.G9ReadHandshake.ValidateIdle(Get(0xA0, 8)); Thread.Sleep(100);
+        Send(request);
+        var deadline=System.Diagnostics.Stopwatch.StartNew();
+        Furycube.G9.Protocol.G9ReadHandshake.WaitForReady(delegate {return Get(0xA0,8);},Thread.Sleep,delegate {return deadline.ElapsedMilliseconds;},2000,100,500);
+        Thread.Sleep(100);
         // A granted read is consumed exactly once, including on validation failure.
         byte[] response = Get(report, length); Thread.Sleep(150); return response;
     }
-    internal byte[] ReadKeys() { return G9Wire.DecodeKeys(Read(G9Wire.ReadKeysRequest(), 8, Device.Product == 0x2148 ? 59 : 64)); }
+    internal byte[] ReadKeys() { return ReadKeys(1); }
+    internal byte[] ReadKeys(int profile) { return G9Wire.DecodeKeys(Read(G9Wire.ReadKeysRequest(profile), 8, Device.Product == 0x2148 ? 59 : 64),profile); }
     internal byte[] ReadProfile() { return G9Wire.DecodeProfile(Read(G9Wire.ReadProfileRequest(), 12, 8)); }
     internal byte[] ReadFirmware() { return G9Wire.DecodeFirmware(Read(G9Wire.ReadFirmwareRequest(), 11, 8)); }
+    ushort IG9SettingsSession.SettingsProductId { get { return Device.Product; } }
+    string IG9SettingsSession.SettingsDevicePath { get { return Device.Path; } }
+    void EnsureSettingsIdentity() {
+        if(Device.Product!=0x2148 || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes<120)
+            throw new InvalidOperationException("Full settings require the same open wired G9 configuration interface.");
+        var attributes=new G9Hid.Attributes {Size=(uint)Marshal.SizeOf(typeof(G9Hid.Attributes))};
+        if(!G9Hid.HidD_GetAttributes(handle,ref attributes) || attributes.Vendor!=0x1D57 || attributes.Product!=0x2148)
+            throw new InvalidOperationException("Settings device identity changed; transaction stopped.");
+    }
+    byte[] IG9SettingsSession.QuerySettings(byte report,int profile) {
+        EnsureSettingsIdentity(); return Read(G9Wire.ReadSettingsRequest(report,profile),report,G9Wire.SettingsReadLength(report));
+    }
+    void IG9SettingsSession.SendSettings(byte[] packet) {
+        EnsureSettingsIdentity(); Send(packet); Thread.Sleep(500);
+    }
+    internal G9SettingsSnapshot ReadSettings(int? profile,string backupDirectory) {
+        lock(oledGate) {
+            oledAuthorized=oledRuntimeStatusAuthorized=false; EnsureSettingsIdentity();
+            return G9SettingsTransactions.Read(this,profile,backupDirectory);
+        }
+    }
+    internal Dictionary<string,object> ApplySettings(int? profile,string field,string value,string backupDirectory) {
+        lock(oledGate) {
+            oledAuthorized=oledRuntimeStatusAuthorized=false; EnsureSettingsIdentity();
+            return G9SettingsTransactions.Apply(this,profile,field,value,backupDirectory);
+        }
+    }
+    internal Dictionary<string,object> RestoreProfilePair(string snapshotFile,string backupDirectory) {
+        lock(oledGate) {
+            oledAuthorized=oledRuntimeStatusAuthorized=false;EnsureSettingsIdentity();
+            return G9SettingsTransactions.RestoreProfilePair(this,snapshotFile,backupDirectory);
+        }
+    }
     void EnsureWiredOledIdentity() {
         if (Device.Product != 0x2148 || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes < OledProtocol.FeatureBytes) {
             oledAuthorized = oledRuntimeStatusAuthorized = false;
@@ -219,8 +287,10 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
                 byte[] query = OledRuntimeStatusCodec.BuildReadRequest();
                 if (!G9Hid.HidD_SetFeature(handle, query, query.Length))
                     throw new Win32Exception(Marshal.GetLastWin32Error(), "OL3 runtime status query failed");
-                Console.WriteLine("RUNTIME_QUERY len=8"); Thread.Sleep(500);
-                G9Wire.ValidateAck(Get(0xA0, 8), true); Thread.Sleep(100);
+                Console.WriteLine("RUNTIME_QUERY len=8");
+                var deadline=System.Diagnostics.Stopwatch.StartNew();
+                Furycube.G9.Protocol.G9ReadHandshake.WaitForReady(delegate {return Get(0xA0,8);},Thread.Sleep,delegate {return deadline.ElapsedMilliseconds;},2000,100,500);
+                Thread.Sleep(100);
                 EnsureWiredOledIdentity();
                 byte[] response = Get(0x22, OledRuntimeStatusCodec.FeatureBytes); Thread.Sleep(150);
                 OledRuntimeStatusCodec.Decode(response, DateTimeOffset.UtcNow);
@@ -228,15 +298,18 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             } catch { oledAuthorized = oledRuntimeStatusAuthorized = false; throw; }
         }
     }
-    internal void WriteKeys(byte[] expected) {
+    internal void WriteKeys(byte[] expected) { WriteKeys(expected,1,false); }
+    internal void WriteKeys(byte[] expected,int profile,bool requireActive) {
         oledAuthorized = oledRuntimeStatusAuthorized = false;
-        expected = G9Wire.DecodeKeys(expected);
-        BindingCatalog.EnsureLeftClick(expected);
-        Console.WriteLine("SELECTING PROFILE=1 MACRO PROFILE=1");
-        Send(G9Wire.SelectProfileOne()); Thread.Sleep(500);
+        expected = G9Wire.DecodeKeys(expected,profile);
+        BindingCatalog.EnsureLeftClick(expected,profile);
+        byte[] before=ReadProfile();
+        if(requireActive && before[0]!=profile) throw new InvalidDataException("Requested button profile is not active; no keymap was written.");
+        Console.WriteLine("WRITING KEYMAP PROFILE={0}; active profile and profile count are preserved",profile);
         Send(expected); Thread.Sleep(500);
-        byte[] actual = ReadKeys();
+        byte[] actual = ReadKeys(profile);
         if (!G9Wire.Equal(actual, expected)) throw new InvalidDataException("Readback differs from requested settings; physical output is not verified");
+        if(!G9Wire.Equal(before,ReadProfile())) throw new InvalidDataException("Active profile or profile count changed during keymap write; operation stopped.");
     }
     public void Dispose() { lock (oledGate) { oledAuthorized = oledRuntimeStatusAuthorized = false; handle.Dispose(); } }
 }
@@ -246,17 +319,17 @@ internal static class G9DeviceProgram {
         if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) text = text.Substring(2);
         byte value; if (!byte.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value)) throw new ArgumentException("Invalid hexadecimal binding byte"); return value;
     }
-    static void PrintMapping(byte[] keymap) {
+    static void PrintMapping(byte[] keymap,int profile) {
         var rows = new List<object>();
         foreach (var button in BindingCatalog.Buttons) {
             int offset = 3 + button.Index * 3; BindingAction action = BindingCatalog.Resolve(keymap[offset], keymap[offset + 1], keymap[offset + 2]);
             rows.Add(new { index = button.Index, name = button.Name, physicalLabel = button.PhysicalLabel, visible = button.IsVisible,
                 function = (int)keymap[offset], param1 = (int)keymap[offset + 1], param2 = (int)keymap[offset + 2], bindingId = action == null ? null : action.Id });
         }
-        Console.WriteLine("MAPPING_JSON " + new JavaScriptSerializer().Serialize(new { profile = 1, keymapHex = G9Wire.Hex(keymap), buttons = rows }));
+        Console.WriteLine("MAPPING_JSON " + new JavaScriptSerializer().Serialize(new { profile = profile, keymapHex = G9Wire.Hex(keymap), buttons = rows }));
     }
     static string SaveBackup(byte[] keys, ushort pid, string directory) {
-        keys = G9Wire.DecodeKeys(keys); Directory.CreateDirectory(directory);
+        keys = G9Wire.DecodeKeys(keys,keys[2]); Directory.CreateDirectory(directory);
         string name = "keymap-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfffffff'Z'") + "-" + pid.ToString("x4") + "-" + Guid.NewGuid().ToString("N") + ".bin";
         string path = Path.Combine(directory, name);
         using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { file.Write(keys, 0, keys.Length); file.Flush(true); }
@@ -265,17 +338,27 @@ internal static class G9DeviceProgram {
     static int Main(string[] args) {
         Console.OutputEncoding = new UTF8Encoding(false);
         try {
-            if (args.Length == 0) { Console.WriteLine("G9Device inspect | mapping | profile | firmware | zero | backup | restore <backup.bin> | assign --index N --function HEX --param1 HEX --param2 HEX | oled-caps | oled-status | oled-frame --file <480-byte-frame.bin> | oled-stream | caps [--pid 2148|fa60] [--backup-dir path]"); return 2; }
+            if (args.Length == 0) { Console.WriteLine("G9Device mapping [--active|--profile1..5] | assign --profile N --index N --function HEX --param1 HEX --param2 HEX | settings-read [--profile N] | settings-set --field ID --value VALUE [--profile N] | profile-restore --file <settings snapshot.json> | inspect | profile | firmware | zero | backup | restore <backup.bin> | oled-caps | oled-status | oled-frame --file <480-byte-frame.bin> | oled-stream | caps [--pid2148|fa60] [--backup-dir path]"); return 2; }
             string command = args[0];
-            if (command != "inspect" && command != "mapping" && command != "profile" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-stream" && command != "caps") throw new ArgumentException("Unknown command");
+            if (command != "inspect" && command != "mapping" && command != "profile" && command != "profile-restore" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "settings-read" && command != "settings-set" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-stream" && command != "caps") throw new ArgumentException("Unknown command");
             ushort pid = 0; string restore = null;
             string frameFile = null; byte[] oledFrame = null;
             int? assignmentIndex = null; byte? function = null; byte param1 = 0, param2 = 0;
+            int? requestedProfile=null; bool activeMapping=false; string settingField=null,settingValue=null;
+            string profileRestoreFile=null;
             string backupDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FURYCUBE-G9-PRO", "backups");
             for (int i = 1; i < args.Length; i++) {
                 if (args[i] == "--pid" && i + 1 < args.Length) {
                     if (!ushort.TryParse(args[++i], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out pid) || (pid != 0x2148 && pid != 0xFA60)) throw new ArgumentException("Unsupported PID");
                 } else if (args[i] == "--backup-dir" && i + 1 < args.Length) backupDirectory = Path.GetFullPath(args[++i]);
+                else if(args[i]=="--profile" && i+1<args.Length && (command=="mapping" || command=="assign" || command=="inspect" || command=="backup" || command=="zero" || command=="restore" || command=="settings-read" || command=="settings-set")) {
+                    int parsed; if(requestedProfile.HasValue || !Int32.TryParse(args[++i],NumberStyles.None,CultureInfo.InvariantCulture,out parsed) || parsed<1 || parsed>5)
+                        throw new ArgumentException("Profile must be1..5 and appear once"); requestedProfile=parsed;
+                }
+                else if(command=="mapping" && args[i]=="--active" && !activeMapping) activeMapping=true;
+                else if(command=="settings-set" && args[i]=="--field" && i+1<args.Length && settingField==null) settingField=args[++i];
+                else if(command=="settings-set" && args[i]=="--value" && i+1<args.Length && settingValue==null) settingValue=args[++i];
+                else if(command=="profile-restore" && args[i]=="--file" && i+1<args.Length && profileRestoreFile==null) profileRestoreFile=Path.GetFullPath(args[++i]);
                 else if (command == "assign" && args[i] == "--index" && i + 1 < args.Length) { int parsed; if (!int.TryParse(args[++i], out parsed) || parsed < 0 || parsed >= 18) throw new ArgumentException("Button index must be 0..17"); assignmentIndex = parsed; }
                 else if (command == "assign" && args[i] == "--function" && i + 1 < args.Length) function = HexByte(args[++i]);
                 else if (command == "assign" && args[i] == "--param1" && i + 1 < args.Length) param1 = HexByte(args[++i]);
@@ -285,6 +368,14 @@ internal static class G9DeviceProgram {
                 else throw new ArgumentException("Unexpected command argument");
             }
             byte[] restored = null;
+            if(command=="profile-restore") {
+                if(profileRestoreFile==null)throw new ArgumentException("Profile-pair restore requires --file pointing to a settings snapshot JSON.");
+                if(pid!=0&&pid!=0x2148)throw new ArgumentException("Profile-pair restore requires wired G9 PID2148.");
+                if(!File.Exists(profileRestoreFile))throw new FileNotFoundException("Settings snapshot file was not found.",profileRestoreFile);
+                pid=0x2148;
+            }
+            if(activeMapping && requestedProfile.HasValue) throw new ArgumentException("Choose either --active or --profile");
+            if(command=="settings-set" && (String.IsNullOrEmpty(settingField) || settingValue==null)) throw new ArgumentException("Settings write requires --field and --value");
             if (command == "oled-frame") {
                 if (frameFile == null || new FileInfo(frameFile).Length != OledProtocol.BufferBytes) throw new InvalidDataException("OLED upload requires --file pointing to a 480-byte packed frame");
                 oledFrame = File.ReadAllBytes(frameFile); OledProtocol.ValidateFrame(oledFrame);
@@ -293,7 +384,7 @@ internal static class G9DeviceProgram {
             if (command == "restore") {
                 if (restore == null) throw new ArgumentException("Restore requires a 59-byte keymap backup");
                 byte[] bytes = File.ReadAllBytes(restore);
-                if (bytes.Length != 59) throw new InvalidDataException("Backup must contain exactly 59 bytes"); restored = G9Wire.DecodeKeys(bytes); BindingCatalog.EnsureLeftClick(restored);
+                if (bytes.Length != 59) throw new InvalidDataException("Backup must contain exactly 59 bytes"); restored = G9Wire.DecodeKeys(bytes,requestedProfile??1); BindingCatalog.EnsureLeftClick(restored,requestedProfile??1);
             }
             if (command == "caps") {
                 foreach (var candidate in G9Hid.Enumerate()) if (pid == 0 || candidate.Product == pid)
@@ -317,20 +408,41 @@ internal static class G9DeviceProgram {
                     }
                     return 0;
                 }
-                if (command == "profile") { byte[] profile = device.ReadProfile(); Console.WriteLine("ACTIVE PROFILE={0} MACRO PROFILE={1}", profile[0], profile[1]); return 0; }
+                if(command=="settings-read") {
+                    var snapshot=device.ReadSettings(requestedProfile,backupDirectory);
+                    Console.WriteLine("SETTINGS_BACKUP "+snapshot.ArchivePath);
+                    Console.WriteLine("SETTINGS_JSON "+new JavaScriptSerializer().Serialize(snapshot.ToDto())); return 0;
+                }
+                if(command=="settings-set") {
+                    Dictionary<string,object> result=device.ApplySettings(requestedProfile,settingField,settingValue,backupDirectory);
+                    Console.WriteLine("SETTINGS_BACKUP "+(string)result["backupPath"]);
+                    Console.WriteLine("SETTINGS_APPLIED_JSON "+new JavaScriptSerializer().Serialize(result)); return 0;
+                }
+                if(command=="profile-restore") {
+                    Dictionary<string,object> result=device.RestoreProfilePair(profileRestoreFile,backupDirectory);
+                    Console.WriteLine("PROFILE_RESTORE_BACKUP "+(string)result["archivePath"]);
+                    Console.WriteLine("PROFILE_RESTORE_JSON "+new JavaScriptSerializer().Serialize(result));return 0;
+                }
+                if (command == "profile") { byte[] profile = device.ReadProfile(); Console.WriteLine("ACTIVE PROFILE={0} MAX PROFILES={1}", profile[0], profile[1]); return 0; }
                 if (command == "firmware") { Console.WriteLine("FIRMWARE_RESPONSE " + G9Wire.Hex(device.ReadFirmware())); return 0; }
-                byte[] current = device.ReadKeys(); Console.WriteLine("BUTTON6 function={0:x2} modifier={1:x2} usage={2:x2}", current[12], current[13], current[14]);
+                int selectedProfile=requestedProfile??1; byte[] profileGuard=null;
+                if(activeMapping || requestedProfile.HasValue) {
+                    profileGuard=device.ReadProfile(); if(activeMapping) selectedProfile=profileGuard[0];
+                    if(profileGuard[0]!=selectedProfile) throw new InvalidDataException("Requested profile is not currently active; select it explicitly before this operation.");
+                }
+                byte[] current = device.ReadKeys(selectedProfile); Console.WriteLine("BUTTON6 function={0:x2} modifier={1:x2} usage={2:x2}", current[12], current[13], current[14]);
+                if(profileGuard!=null && !G9Wire.Equal(profileGuard,device.ReadProfile())) throw new InvalidDataException("Active profile changed during keymap read; operation stopped.");
                 if (command == "inspect") { Console.WriteLine("KEYMAP VALIDATED. A physical keypress is a separate check."); return 0; }
-                if (command == "mapping") { PrintMapping(current); return 0; }
-                byte[] expected = command == "assign" ? BindingCatalog.WithAssignment(current, assignmentIndex.Value, function.Value, param1, param2) :
-                    command == "zero" ? BindingCatalog.WithAssignment(current, 3, 0x11, 0, 0x27) : restored;
+                if (command == "mapping") { PrintMapping(current,selectedProfile); return 0; }
+                byte[] expected = command == "assign" ? BindingCatalog.WithAssignment(current, assignmentIndex.Value, function.Value, param1, param2,selectedProfile) :
+                    command == "zero" ? BindingCatalog.WithAssignment(current, 3, 0x11, 0, 0x27,selectedProfile) : restored;
                 SaveBackup(current, device.Device.Product, backupDirectory);
                 if (command == "backup") return 0;
-                device.WriteKeys(expected);
+                device.WriteKeys(expected,selectedProfile,requestedProfile.HasValue);
                 Console.WriteLine("CONFIG VERIFIED. Tool is exiting. Test the sixth button in a text field."); return 0;
             }
         } catch (OledFirmwareUnsupportedException error) { Console.WriteLine("OLED_UNSUPPORTED " + error.Message); return 4; }
-        catch (NotSupportedException error) { Console.WriteLine("OLED_UNSUPPORTED " + error.Message); return 4; }
+        catch (NotSupportedException error) { Console.Error.WriteLine("ERROR: " + error.Message); return 1; }
         catch (Exception error) { Console.Error.WriteLine("ERROR: " + error.Message); return 1; }
     }
 }

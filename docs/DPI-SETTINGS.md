@@ -44,9 +44,12 @@ bytes produces incorrect values such as 801/1601. The examined driver
 `GetFeature` path does not establish a conversion that would justify treating
 those formats as interchangeable.
 
-A 52-byte `GET 0x04` response is intentionally **not supported by this parser**.
-Its source/transport variant needs separate validation. These findings do not
-add a query to the standalone client's allowlist.
+A 52-byte `GET 0x04` response is intentionally **not supported by this particular
+captured-SET parser**. The later `src/G9MouseSettings.cs` codec separately validates
+the firmware GET layout and cross-checks it against the logical 117-byte profile.
+That separate configuration path has now passed a complete physical wired read;
+it is included in the configuration allowlist. It never substitutes captured SET
+bytes for a failed read. See [settings inventory](SETTINGS-PARITY.md).
 
 ## Why the live widget still needs a trustworthy source
 
