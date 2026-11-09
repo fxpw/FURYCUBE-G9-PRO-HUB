@@ -9,6 +9,21 @@ internal static class OledStreaming {
     const int MaximumLineLength = 1024;
     const string Prefix = "FRAME ";
 
+    // Console.In uses the ambient OEM console code page on .NET Framework.
+    // Process.StandardInput may also emit a UTF-8 BOM as soon as it starts.
+    // Decode that transport once here; the command parser remains strict.
+    internal static StreamReader OpenUtf8Input(Stream input) {
+        return new StreamReader(input, new UTF8Encoding(false, true), true, 1024, true);
+    }
+
+    internal static int RunUtf8(Stream input, TextWriter output, IOledTransport transport) {
+        return RunUtf8(input, output, transport, null);
+    }
+
+    internal static int RunUtf8(Stream input, TextWriter output, IOledTransport transport, Action<int> delay) {
+        using (var reader = OpenUtf8Input(input)) return Run(reader, output, transport, delay);
+    }
+
     internal static int Run(TextReader input, TextWriter output, IOledTransport transport) {
         return Run(input, output, transport, null);
     }

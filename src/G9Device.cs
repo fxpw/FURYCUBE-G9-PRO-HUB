@@ -272,7 +272,7 @@ internal static class G9DeviceProgram {
                 Console.WriteLine("CAPS ONLY: no feature reports requested or settings written."); return 0;
             }
             using (var device = new G9Connection(pid)) {
-                if (command == "oled-stream") return OledStreaming.Run(Console.In, Console.Out, new NativeOledTransport(device));
+                if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out, new NativeOledTransport(device));
                 if (command == "oled-caps" || command == "oled-frame") {
                     var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();
                     Console.WriteLine("OLED_CAPS_JSON " + new JavaScriptSerializer().Serialize(new { supported = true, extension = capabilities.Extension, width = capabilities.Width,

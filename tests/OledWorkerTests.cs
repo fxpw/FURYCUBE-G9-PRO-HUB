@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,11 +15,13 @@ internal static class OledWorkerTests {
         if(mode=="silent-exit")return 0;
         Console.WriteLine("FAKE_HELPER_NO_USB");Console.WriteLine("OLED_STREAM_READY");Console.Out.Flush();
         if(mode=="stderr"){Console.Error.WriteLine("ERROR fake failure");Console.Error.Flush();Thread.Sleep(10000);return 1;}
-        int index=0;for(;;){string line=Console.ReadLine();if(line==null||line=="STOP")return 0;
+        using(var input=OledStreaming.OpenUtf8Input(Console.OpenStandardInput())){
+        int index=0;for(;;){string line=input.ReadLine();if(line==null)return mode=="normal"?3:0;if(line=="STOP")return 0;
             if(!line.StartsWith("FRAME ")||Convert.FromBase64String(line.Substring(6)).Length!=480)return 2;
             if(mode=="hang")Thread.Sleep(Timeout.Infinite);
             if(mode=="delay")Thread.Sleep(80);
             index++;Console.WriteLine("OLED_FRAME_SENT "+(mode=="bad-ack"?7:index));Console.Out.Flush();
+        }
         }
     }
     static bool Dead(int pid){try{using(var p=Process.GetProcessById(pid))return p.HasExited;}catch(ArgumentException){return true;}}
@@ -26,6 +29,27 @@ internal static class OledWorkerTests {
         if(args.Length==2&&args[0]=="--fake-helper")return Child(args[1]);
         try{
             byte[] frame=new byte[480];
+            Encoding originalInput=Console.InputEncoding;
+            try{
+                // Process.Start itself can put this BOM in the pipe, before the
+                // worker's explicitly encoded writer has written any command.
+                Console.InputEncoding=new UTF8Encoding(true);
+                int bomPid;
+                using(var worker=Worker("normal",3000,null)){
+                    bomPid=worker.ProcessId;
+                    using(var child=Process.GetProcessById(bomPid)){
+                        // Keep the process handle so its final status remains
+                        // inspectable after the worker closes its own Process.
+                        IntPtr handle=child.Handle;
+                        worker.Send(frame);worker.Send(frame);
+                        Check(worker.FramesSubmitted==2,"UTF-8 BOM transport accepts two exact frames");
+                        Check(Console.InputEncoding.CodePage==65001&&Console.InputEncoding.GetPreamble().Length==3,"worker does not change global console encoding");
+                        worker.Dispose();
+                        Check(child.WaitForExit(1000)&&child.ExitCode==0,"UTF-8 BOM transport terminates through the exact STOP command, not EOF or kill");
+                    }
+                }
+                Check(Dead(bomPid),"UTF-8 BOM transport closes the helper");
+            }finally{Console.InputEncoding=originalInput;}
             int normalPid;
             using(var worker=Worker("normal",3000,delegate(string text){throw new InvalidOperationException("Logger closed");})){normalPid=worker.ProcessId;worker.Send(frame);worker.Send(frame);Check(worker.FramesSubmitted==2,"two frames share one helper despite a throwing logger");}
             Check(Dead(normalPid),"Dispose terminates the normal helper");

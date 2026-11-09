@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using Furycube.G9.Oled;
 
 internal static class OledStreamTests {
@@ -42,7 +43,40 @@ internal static class OledStreamTests {
         }
         throw new Exception("FAIL accepted " + name);
     }
+    static MemoryStream Utf8Bytes(string text, bool bom) {
+        byte[] content = new UTF8Encoding(false, true).GetBytes(text);
+        byte[] prefix = bom ? new byte[] { 0xEF, 0xBB, 0xBF } : new byte[0];
+        var stream = new MemoryStream(); stream.Write(prefix, 0, prefix.Length); stream.Write(content, 0, content.Length); stream.Position = 0; return stream;
+    }
+    static void CheckByteTransport() {
+        foreach (bool bom in new[] { false, true }) {
+            var fake = new FakeTransport(); var output = new StringWriter();
+            using (var bytes = Utf8Bytes(Frame(0x42, 0xF) + "\nSTOP\n", bom)) {
+                int result = OledStreaming.RunUtf8(bytes, output, fake, delegate(int value) { });
+                Check(result == 0 && fake.Reads == 1 && fake.Writes.Count == 4, "byte transport accepts " + (bom ? "one leading UTF-8 BOM" : "ASCII without BOM"));
+                Check(fake.Writes[0][10] == 0x42 && fake.Writes[3][129] == 0xF, "byte transport preserves frame pixels");
+                Check(output.ToString().Replace("\r\n", "\n") == "OLED_STREAM_READY\nOLED_FRAME_SENT 1\n", "byte transport confirms exactly one frame");
+                Check(bytes.CanRead, "byte transport leaves caller's stream open");
+            }
+        }
+        foreach (string text in new[] { "\uFEFF" + Frame(1, 0), Frame(1, 0) + "\n\uFEFF" + Frame(2, 0) }) {
+            var fake = new FakeTransport(); var output = new StringWriter(); bool later = text[0] != '\uFEFF';
+            using (var bytes = Utf8Bytes(text + "\n" + Frame(3, 0), true)) {
+                try { OledStreaming.RunUtf8(bytes, output, fake, delegate(int value) { }); throw new Exception("FAIL accepted repeated/interior BOM"); }
+                catch (InvalidDataException) { checks++; }
+                Check(fake.Writes.Count == (later ? 4 : 0), "only the initial BOM is stripped; repeated/interior BOM stops before that frame");
+                Check(!output.ToString().Contains("OLED_FRAME_SENT 2"), "interior BOM cannot produce a false second ACK");
+            }
+        }
+        var invalid = new FakeTransport();
+        using (var bytes = new MemoryStream(new byte[] { 0xC3, 0x28, 10 })) {
+            try { OledStreaming.RunUtf8(bytes, new StringWriter(), invalid, delegate(int value) { }); throw new Exception("FAIL accepted malformed UTF-8"); }
+            catch (DecoderFallbackException) { checks++; }
+            Check(invalid.Writes.Count == 0, "malformed UTF-8 rejected before feature writes");
+        }
+    }
     static int Main() { try {
+        CheckByteTransport();
         var transport = new FakeTransport(); var output = new StringWriter(); var delays = new List<int>();
         int result = OledStreaming.Run(new StringReader(Frame(0x81, 0xF) + "\r\n" + Frame(0x42, 1) + "\nSTOP\n" + Frame(3, 0)),
             output, transport, delegate(int value) { delays.Add(value); });

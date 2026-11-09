@@ -12,6 +12,7 @@ internal sealed class G9OledWorker : IDisposable {
     readonly AutoResetEvent changed=new AutoResetEvent(false);
     readonly Action<string> log;
     readonly Process process;
+    StreamWriter input;
     readonly int timeoutMilliseconds;
     bool ready,disposed;
     int sent,acknowledged;
@@ -35,6 +36,11 @@ internal sealed class G9OledWorker : IDisposable {
         process.Exited+=delegate{lock(state){if(!disposed&&error==null)error="Вспомогательный процесс OLED завершился.";}Signal();};
         try{
             if(!process.Start())throw new IOException("Не удалось запустить вспомогательный процесс OLED.");
+            // Process.StandardInput inherits Console.InputEncoding on .NET Framework.
+            // Framework can emit its UTF-8 preamble during Start; the receiving
+            // UTF-8 reader removes that one transport marker. All commands and
+            // Base64 after it use this explicit ASCII writer, never console defaults.
+            input=new StreamWriter(process.StandardInput.BaseStream,Encoding.ASCII);input.NewLine="\n";
             ProcessId=process.Id;process.BeginOutputReadLine();process.BeginErrorReadLine();
         }catch{StopChild(false);process.Dispose();changed.Dispose();throw;}
     }
@@ -81,7 +87,7 @@ internal sealed class G9OledWorker : IDisposable {
                 WaitFor(true,0);int frame;
                 lock(inputGate){
                     lock(state){if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);frame=++sent;}
-                    process.StandardInput.WriteLine("FRAME "+Convert.ToBase64String(snapshot));process.StandardInput.Flush();
+                    input.WriteLine("FRAME "+Convert.ToBase64String(snapshot));input.Flush();
                 }
                 WaitFor(false,frame);
             }catch(Exception error){Fail(error.Message);StopChild(false);throw;}
@@ -91,7 +97,7 @@ internal sealed class G9OledWorker : IDisposable {
         try{
             int code;if(TryExited(out code))return;
             if(graceful){
-                try{lock(inputGate){if(!TryExited(out code)){process.StandardInput.WriteLine("STOP");process.StandardInput.Flush();process.StandardInput.Close();}}}
+                try{lock(inputGate){if(!TryExited(out code)){input.WriteLine("STOP");input.Flush();input.Close();}}}
                 catch(IOException){}catch(InvalidOperationException){}
                 if(process.WaitForExit(500))return;
             }
@@ -101,6 +107,9 @@ internal sealed class G9OledWorker : IDisposable {
     }
     public void Dispose(){
         lock(state){if(disposed)return;disposed=true;}Signal();
-        try{StopChild(true);}finally{process.Dispose();changed.Dispose();}
+        try{StopChild(true);}finally{
+            lock(inputGate){try{if(input!=null)input.Dispose();}catch(IOException){}catch(InvalidOperationException){}}
+            process.Dispose();changed.Dispose();
+        }
     }
 }
