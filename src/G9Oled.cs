@@ -12,8 +12,9 @@ namespace Furycube.G9.Oled {
         public int StorageHeight { get { return 32; } }
         public int Pages { get { return 4; } }
         public int BufferBytes { get { return 480; } }
-        public string Extension { get { return "OL2"; } }
-        internal FirmwareCapabilities(byte major, byte minor) { VersionMajor = major; VersionMinor = minor; }
+        public string Extension { get; private set; }
+        public bool SupportsRuntimeStatus { get { return Extension == "OL3"; } }
+        internal FirmwareCapabilities(byte major, byte minor, string extension) { VersionMajor = major; VersionMinor = minor; Extension = extension; }
     }
 
     public sealed class OledPage {
@@ -31,11 +32,11 @@ namespace Furycube.G9.Oled {
         public static FirmwareCapabilities DecodeFirmwareCapabilities(byte[] reply, byte? expectedMajor = 1, byte? expectedMinor = 8) {
             Require(reply != null && reply.Length == 8 && reply[0] == 0x0B && (reply[1] == 5 || reply[1] == 8) && reply[2] == 1,
                 "Unexpected firmware-version response; OLED writes are disabled");
-            Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' && reply[7] == (byte)'2',
-                "Firmware does not advertise OL2; OLED writes are disabled");
+            Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' && (reply[7] == (byte)'2' || reply[7] == (byte)'3'),
+                "Firmware does not advertise OL2/OL3; OLED operations are disabled");
             Require((!expectedMajor.HasValue || reply[3] == expectedMajor.Value) && (!expectedMinor.HasValue || reply[4] == expectedMinor.Value),
-                "Firmware version does not match the supported OL2 revision");
-            return new FirmwareCapabilities(reply[3], reply[4]);
+                "Firmware version does not match the supported OLED revision");
+            return new FirmwareCapabilities(reply[3], reply[4], reply[7] == (byte)'3' ? "OL3" : "OL2");
         }
         public static byte[] BuildDiscoveryRequest() { return new byte[] { 0xA0, 0x0B, 8, 0, 1, 0, 0, 0 }; }
 
@@ -111,7 +112,7 @@ namespace Furycube.G9.Oled {
         public FirmwareCapabilities Capabilities { get { lock (gate) return capabilities; } }
         void ValidateIdentity() {
             if (transport.VendorId != 0x1D57 || transport.ProductId != 0x2148)
-                throw new NotSupportedException("OL2 is currently restricted to the wired G9 1D57:2148; receiver/bootloader writes are disabled");
+                throw new NotSupportedException("OLED extensions require the wired G9 1D57:2148; receiver/bootloader operations are disabled");
         }
         public FirmwareCapabilities Discover() {
             lock (gate) {
@@ -119,10 +120,24 @@ namespace Furycube.G9.Oled {
                 capabilities = OledProtocol.DecodeFirmwareCapabilities(transport.ReadFirmwareVersion()); return capabilities;
             }
         }
+        public byte[] ReadRuntimeStatusFrame() {
+            lock (gate) {
+                ValidateIdentity();
+                if (capabilities == null) throw new InvalidOperationException("Verified OLED discovery is required before runtime status");
+                if (!capabilities.SupportsRuntimeStatus) throw new NotSupportedException("OL2 firmware does not implement runtime status; GET 0x22 is disabled");
+                var statusTransport = transport as IOledRuntimeStatusTransport;
+                if (statusTransport == null) throw new NotSupportedException("This OLED transport does not implement guarded runtime status");
+                try {
+                    byte[] response = statusTransport.ReadRuntimeStatus();
+                    OledRuntimeStatusCodec.Decode(response, DateTimeOffset.UtcNow);
+                    return (byte[])response.Clone();
+                } catch { capabilities = null; displayInitialized = false; throw; }
+            }
+        }
         public OledTransferResult WriteFrame(byte[] pixels) {
             lock (gate) {
                 ValidateIdentity();
-                if (capabilities == null) throw new InvalidOperationException("A valid OL2 discovery is required before any OLED feature report");
+                if (capabilities == null) throw new InvalidOperationException("A valid OL2/OL3 discovery is required before any OLED feature report");
                 // Validate and build ALL pages first: a bad final-page tail cannot cause a partial write.
                 byte[][] reports = OledProtocol.BuildFrameReports(pixels, !displayInitialized); int sent = 0;
                 try { foreach (byte[] report in reports) { transport.SendFeature(report); sent++; if (sent < reports.Length) wait(25); } }

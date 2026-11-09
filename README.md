@@ -69,19 +69,33 @@ The canvas is **120 × 28 monochrome pixels**. CPU and RAM use Windows APIs.
 NVIDIA metrics use NVML from an existing driver installation. CPU temperature
 can use an already running local sensor source; no sensor driver is installed.
 Battery and DPI-level widgets listen to passive mouse input reports. Missing or
-expired values show a dash. `DPI#` is the level number (1–8), **not** numeric DPI;
-the separate numeric-DPI widget remains unavailable until its source is verified.
+expired values show a dash. `DPI#` is the last reported level number (1–8),
+**not** numeric DPI. The separate numeric widget uses an OL3 snapshot of the
+configured value used by the stock OLED, with a maximum host age of one second.
+OL3 has passed offline checks; it has not been installed or tested on the mouse.
+Stock and OL2 leave the numeric widget unavailable.
+Profile notifications invalidate the cached level; lost notifications prevent
+using a stored table as a reliable live numeric-DPI source. The saved DPI frame
+format is decoded separately and is never presented as a fresh device readback.
 After disconnecting the telemetry source, restart the HUB to connect it again.
 GIF import currently uses one frame.
 
-**Physical OLED upload requires the experimental OL2 firmware extension.**
+**Physical OLED upload requires the experimental OL2 or OL3 firmware extension.**
 Stock firmware does not advertise it. The host checks capabilities before writing
-a frame. Physical orientation, sleep, and persistence remain unverified; the stock
-renderer may overwrite a custom image. Live PC widgets require the HUB to keep
+a frame. Physical orientation and retention remain unverified. Stock redraws
+can overwrite a custom image, and stock sleep/off code explicitly clears it.
+Persistent image storage and exclusive display ownership are not implemented.
+Live PC widgets require the HUB to keep
 running and sending updates. Enable **Обновлять OLED каждую секунду** for live
 updates; the helper reuses one verified connection and initializes only the first
 frame. An error stops updates without automatic retries. Live updates are off
 after every application launch. A desktop preview does not prove OLED support.
+
+OL3 status is requested only for an explicit upload/live update that renders a
+numeric DPI widget. It does not combine passive profile events with saved tables.
+Invalid/busy/expired replies show a dash; an OL2 session can still send pixels.
+The normal A0 request wakes the mouse/display and updates inactivity timers.
+The custom status path skips profile preload/reload and does not write NVM.
 
 ## Development and verification
 
@@ -99,8 +113,9 @@ input is absent, including in public CI.
 | `src/G9Screen.cs`, `src/G9ScreenEditor.cs` | Rendering, image layers, widgets, and projects |
 | `src/G9Sensors.cs` | Optional system metrics without installing drivers |
 | `src/G9Telemetry.cs`, `src/G9TelemetryReader.cs` | Passive mouse battery and DPI-level input |
-| `src/G9Oled.cs` | OL2 capability checks and frame encoding |
+| `src/G9Oled.cs`, `src/G9OledRuntimeStatus.cs` | OL2/OL3 capabilities, frames and fresh numeric status |
 | `src/G9FirmwareOledPatch.cs`, `firmware/g9_oled.S` | Offline firmware builder and own ARM extension |
+| `src/G9FirmwareOl3Patch.cs`, `firmware/g9_ol3.S` | Offline OL3 candidate, preserving the original OL2 code |
 
 Useful configuration commands:
 
@@ -121,6 +136,9 @@ Recovery requirements before any installation: [docs/RECOVERY.md](docs/RECOVERY.
 Detailed research: [hardware identity](docs/HARDWARE-IDENTITY.md),
 [normal USB readback](docs/USB-READBACK.md), [UART/security](docs/RECOVERY-UART.md).
 Mouse telemetry sources: [docs/TELEMETRY.md](docs/TELEMETRY.md).
+[Numeric DPI format and live-source requirements](docs/DPI-SETTINGS.md).
+[OL3 protocol and offline proof](docs/OL3-STATUS-DESIGN.md),
+[stock redraw and frame lifetime](docs/OLED-REDRAW.md).
 OLED wire format and ARM extension: [firmware/OLED-PROTOCOL.md](firmware/OLED-PROTOCOL.md).
 Research emulators require Python, Capstone, Unicorn, and a separately obtained
 official firmware image; they are not required to run the HUB.

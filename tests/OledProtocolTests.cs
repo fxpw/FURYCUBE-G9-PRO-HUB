@@ -35,6 +35,10 @@ internal static class OledProtocolTests {
         Check(OledProtocol.Crc16CcittFalse(Encoding.ASCII.GetBytes("123456789"), 0, 9) == 0x29B1, "standard CCITT-FALSE check vector");
         var fake = new FakeTransport(); var caps = OledProtocol.DecodeFirmwareCapabilities(fake.Reply);
         Check(caps.Width == 120 && caps.VisibleHeight == 28 && caps.StorageHeight == 32 && caps.BufferBytes == 480 && caps.Extension == "OL2", "advertised fixed geometry");
+        Check(!caps.SupportsRuntimeStatus, "OL2 does not authorize status GET22");
+        var caps3 = OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'3',false));
+        Check(caps3.Extension == "OL3" && caps3.SupportsRuntimeStatus, "OL3 advertises runtime status with the same geometry");
+        Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'4',false)); }, "unknown OLED extension revision");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply, 1, 5, false)).VersionMinor == 8, "ARM version reply logical length five with complete eight-byte transfer");
         Check(BitConverter.ToString(OledProtocol.BuildDiscoveryRequest()) == "A0-0B-08-00-01-00-00-00", "stock-safe existing version query");
         Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(new byte[] { 11, 8, 1, 1, 8, 0, 0, 0 }); }, "stock firmware zeros");

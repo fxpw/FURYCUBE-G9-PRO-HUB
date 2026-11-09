@@ -2,7 +2,7 @@ using System;
 
 namespace Furycube.G9.Telemetry
 {
-    public enum TelemetryReportKind { Battery, DpiStage }
+    public enum TelemetryReportKind { Battery, DpiStage, Profile }
     public enum BatteryState { Discharging = 1, Full = 2, Charging = 3 }
 
     public sealed class TelemetryUpdate
@@ -12,6 +12,7 @@ namespace Furycube.G9.Telemetry
         public int? BatteryPercent { get; internal set; }
         public BatteryState? BatteryState { get; internal set; }
         public int? DpiStage { get; internal set; }
+        public int? ReportedProfileId { get; internal set; }
     }
 
     // Pure decoding only: this module cannot open HID handles or issue USB requests.
@@ -59,6 +60,19 @@ namespace Furycube.G9.Telemetry
                 };
                 return true;
             }
+            if (report[2] == 0x80)
+            {
+                // Firmware notification: zero-based profile 0..4, not an
+                // authoritative query. Some profile changes emit no notification.
+                // See docs/PROFILE-TELEMETRY.md; never derive numeric DPI here.
+                if (report[3] > 4 || report[4] != 0) return false;
+                update = new TelemetryUpdate {
+                    Kind = TelemetryReportKind.Profile,
+                    Command = report[2],
+                    ReportedProfileId = report[3] + 1
+                };
+                return true;
+            }
             return false;
         }
     }
@@ -72,7 +86,11 @@ namespace Furycube.G9.Telemetry
         public DateTimeOffset? BatterySampledAt { get; internal set; }
         public int? DpiStage { get; internal set; }
         public DateTimeOffset? DpiStageSampledAt { get; internal set; }
-        // A stage is not a DPI value. Do not infer a factory setting or poll GET10
+        // Last notification only: lost packets and silent SET0C changes mean it
+        // is not guaranteed to describe the mouse's current active profile.
+        public int? ReportedProfileId { get; internal set; }
+        public DateTimeOffset? ReportedProfileSampledAt { get; internal set; }
+        // A stage is not a DPI value. Do not infer a factory setting or poll GET 0x0A
         // to populate this: that read reloads a flash profile in stock firmware.
         public int? Dpi { get { return null; } }
         public string SourceName { get { return "G9 PRO passive HID input"; } }
@@ -85,8 +103,8 @@ namespace Furycube.G9.Telemetry
     {
         readonly string connectionKey;
         readonly object gate = new object();
-        TelemetryUpdate battery, dpiStage;
-        DateTimeOffset batteryAt, dpiAt;
+        TelemetryUpdate battery, dpiStage, reportedProfile;
+        DateTimeOffset batteryAt, dpiAt, profileAt;
 
         public TelemetryCache(string connectionKey)
         {
@@ -110,11 +128,23 @@ namespace Furycube.G9.Telemetry
                     battery = update;
                     batteryAt = receivedAt;
                 }
-                else
+                else if (update.Kind == TelemetryReportKind.DpiStage)
                 {
                     if (dpiStage != null && receivedAt < dpiAt) return false;
+                    if (reportedProfile != null && receivedAt < profileAt) return false;
                     dpiStage = update;
                     dpiAt = receivedAt;
+                }
+                else
+                {
+                    if (reportedProfile != null && receivedAt < profileAt) return false;
+                    if (dpiStage != null && receivedAt < dpiAt) return false;
+                    reportedProfile = update;
+                    profileAt = receivedAt;
+                    // Even the same profile can reload a different stage. Retain
+                    // the timestamp watermark so delayed stage events cannot
+                    // resurrect the invalidated value. Battery is independent.
+                    dpiStage = null;
                 }
             }
             return true;
@@ -122,13 +152,19 @@ namespace Furycube.G9.Telemetry
 
         public TelemetrySnapshot Snapshot(DateTimeOffset now, TimeSpan maximumAge)
         {
-            return Snapshot(now, maximumAge, maximumAge);
+            return Snapshot(now, maximumAge, maximumAge, maximumAge);
         }
 
         public TelemetrySnapshot Snapshot(DateTimeOffset now, TimeSpan batteryMaximumAge, TimeSpan dpiStageMaximumAge)
         {
+            return Snapshot(now, batteryMaximumAge, dpiStageMaximumAge, dpiStageMaximumAge);
+        }
+
+        public TelemetrySnapshot Snapshot(DateTimeOffset now, TimeSpan batteryMaximumAge, TimeSpan dpiStageMaximumAge, TimeSpan reportedProfileMaximumAge)
+        {
             if (batteryMaximumAge < TimeSpan.Zero) throw new ArgumentOutOfRangeException("batteryMaximumAge");
             if (dpiStageMaximumAge < TimeSpan.Zero) throw new ArgumentOutOfRangeException("dpiStageMaximumAge");
+            if (reportedProfileMaximumAge < TimeSpan.Zero) throw new ArgumentOutOfRangeException("reportedProfileMaximumAge");
             var result = new TelemetrySnapshot { SampledAt = now };
             lock (gate)
             {
@@ -144,13 +180,18 @@ namespace Furycube.G9.Telemetry
                     result.DpiStage = dpiStage.DpiStage;
                     result.DpiStageSampledAt = dpiAt;
                 }
+                if (reportedProfile != null && IsFresh(profileAt, now, reportedProfileMaximumAge))
+                {
+                    result.ReportedProfileId = reportedProfile.ReportedProfileId;
+                    result.ReportedProfileSampledAt = profileAt;
+                }
             }
             return result;
         }
 
         public void Reset()
         {
-            lock (gate) { battery = null; dpiStage = null; }
+            lock (gate) { battery = null; dpiStage = null; reportedProfile = null; batteryAt = dpiAt = profileAt = default(DateTimeOffset); }
         }
 
         static bool IsFresh(DateTimeOffset sample, DateTimeOffset now, TimeSpan maximumAge)

@@ -199,6 +199,10 @@ internal sealed class G9Hub : Form {
             preparedDirectory = G9FirmwareOledPatch.Prepare(root); Append("Артефакты OL2: " + preparedDirectory);
             return "Кандидат OL2 подготовлен локально. Прошивка не установлена; восстановление и физическая проверка ещё нужны.";
         }); });
+        AddButton(buttons, "Подготовить OLED + DPI", async delegate { await Execute("Готовлю кандидат OL3 и проверяю все CRC…", delegate {
+            preparedDirectory = G9FirmwareOl3Patch.Prepare(root); Append("Артефакты OL3: " + preparedDirectory);
+            return "Кандидат OL3 подготовлен локально. В мышь не установлен; восстановление и физическая проверка ещё нужны.";
+        }); });
         AddButton(buttons, "Открыть папку", delegate { Process.Start(new ProcessStartInfo { FileName = preparedDirectory ?? root, UseShellExecute = true }); });
         AddButton(buttons, "Сохранить назначения", async delegate { await Execute("Сохраняю таблицу кнопок…", delegate {
             RunProtocol("backup"); return "Копия назначений сохранена. Это копия таблицы кнопок, а не всей прошивки.";
@@ -215,7 +219,7 @@ internal sealed class G9Hub : Form {
         var assignments = new TabPage("Назначения кнопок"); assignments.Controls.Add(new G9ButtonEditor(RunProtocol, Append));
         var mouse = new TabPage("Устройство и прошивка") { Padding=new Padding(8) };
         mouse.Controls.Add(log); mouse.Controls.Add(buttons); mouse.Controls.Add(status); mouse.Controls.Add(description);
-        screenEditor=new G9ScreenEditor(Append,SendFrame);
+        screenEditor=new G9ScreenEditor(Append,SendFrame,ReadRuntimeStatus);
         var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(screenEditor);
         tabs.TabPages.Add(assignments); tabs.TabPages.Add(screen); tabs.TabPages.Add(mouse); tabs.SelectedIndex=0; Controls.Add(tabs);
         Append("USB-команды выполняются только кнопками проверки и назначения. Подготовка исправления полностью локальная.");
@@ -265,6 +269,28 @@ internal sealed class G9Hub : Form {
             }
         });
     }
+    Task<Furycube.G9.Oled.OledRuntimeStatus> ReadRuntimeStatus() {
+        return Task.Run(delegate {
+            lock(deviceGate) {
+                if(closing)throw new ObjectDisposedException("HUB");
+                G9OledWorker current=oledWorker;
+                try {
+                    if(current==null) {
+                        current=new G9OledWorker(root,Append);
+                        System.Threading.Interlocked.Exchange(ref oledWorker,current);
+                        if(closing)throw new ObjectDisposedException("HUB");
+                    }
+                    return current.ReadRuntimeStatus();
+                } catch {
+                    if(current!=null) {
+                        System.Threading.Interlocked.CompareExchange(ref oledWorker,null,current);
+                        current.Dispose();
+                    }
+                    throw;
+                }
+            }
+        });
+    }
     protected override void Dispose(bool disposing) {
         if(disposing) {
             closing=true;
@@ -291,8 +317,8 @@ internal sealed class G9Hub : Form {
         }
     }
     [STAThread] static int Main(string[] args) {
-        if (args.Length == 2 && (args[0] == "--prepare" || args[0] == "--prepare-oled")) {
-            try { Console.WriteLine(args[0] == "--prepare-oled" ? G9FirmwareOledPatch.Prepare(args[1]) : G9FirmwarePatch.Prepare(args[1])); return 0; }
+        if (args.Length == 2 && (args[0] == "--prepare" || args[0] == "--prepare-oled" || args[0] == "--prepare-ol3")) {
+            try { Console.WriteLine(args[0] == "--prepare-ol3" ? G9FirmwareOl3Patch.Prepare(args[1]) : args[0] == "--prepare-oled" ? G9FirmwareOledPatch.Prepare(args[1]) : G9FirmwarePatch.Prepare(args[1])); return 0; }
             catch (Exception error) { Console.Error.WriteLine(error.ToString()); return 1; }
         }
         if (args.Length != 0) return 2;

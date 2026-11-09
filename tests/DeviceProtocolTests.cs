@@ -41,6 +41,7 @@ internal static class DeviceProtocolTests {
         G9Wire.DecodeFirmware(Hex("0b050101084f4c32")); count++;
         Reject(delegate { G9Wire.DecodeFirmware(Hex("0b08020108000000")); }, "wrong version selector");
         Reject(delegate { G9Wire.ValidateSend(Hex("2200000000000000")); }, "OLED feature report excluded from generic transport");
+        Reject(delegate { G9Wire.ValidateSend(Furycube.G9.Oled.OledRuntimeStatusCodec.BuildReadRequest()); }, "OL3 status query excluded from generic configuration allowlist");
         G9Wire.ValidateSend(zero); count++; G9Wire.ValidateSend(G9Wire.SelectProfileOne()); count++;
         Reject(delegate { G9Wire.ValidateSend(Hex("1008000000000000")); }, "firmware-update entry command");
         Reject(delegate { G9Wire.ValidateSend(Change(zero, 58, 0)); }, "bad keymap write");

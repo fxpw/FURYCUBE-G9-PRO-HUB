@@ -22,6 +22,7 @@ mouse, consumer-control or bootloader collection as a substitute.
 | `03 C9 40 state percent` | `state`1=discharging,2=full,3=charging; percent0..100 | Firmware `0x319B6` / `0x319E8`; native HUB `0x41D47F..0x41D5F9` |
 | `03 C9 41 state percent` | Same fields, recognized by old web HUB | `evidence/web-driver.js`, connection parser around byte1393386; this variant was not captured on this device |
 | `03 C9 10 stage 00` | Current **one-based DPI stage**,1..8 | Firmware `0x31A0C..0x31A58`, native HUB `0x41CF74..0x41CFBF` and `0x41D3F4..0x41D43F`; physical input capture still pending |
+| `03 C9 80 p 00` | Profile notification, **zero-based** `p=0..4`, displayed as 1–5 | Firmware `0x31A5A`, direct wired copy; source notification can be lost or precede a completed load |
 
 Firmware addresses refer to `evidence/g9pro-firmware-normalized.bin`, effective
 base `0x28790`. The battery formatter writes model byte `C9`, command `40`,
@@ -42,6 +43,14 @@ The passive event has no numeric DPI value. The stage must be joined to a proven
 stage-to-DPI table for the same device/profile before a numeric DPI widget can be
 enabled. `TelemetrySnapshot.Dpi` therefore remains null; `DpiStage` is available
 as a separate, accurately labelled value.
+
+Every accepted profile notification clears the cached stage, including a repeated
+profile. Out-of-order packets cannot restore it; battery data is unaffected.
+`ReportedProfileId` is the last notification with its own timestamp/expiry,
+not a guarantee of the currently applied profile. Stock notifications are
+incomplete and overwrite each other, so they cannot alone authorize a numeric
+table/stage join. See [profile evidence](PROFILE-TELEMETRY.md) and the
+[strict saved-frame decoder](DPI-SETTINGS.md).
 
 Reading stock report **`0x0A` (decimal 10)** is **not** a neutral runtime-DPI
 observer. Selectors 1–5 request a flash profile load before serving the report;

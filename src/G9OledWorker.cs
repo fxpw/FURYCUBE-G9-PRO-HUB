@@ -15,10 +15,14 @@ internal sealed class G9OledWorker : IDisposable {
     StreamWriter input;
     readonly int timeoutMilliseconds;
     bool ready,disposed;
+    bool framePending,statusPending,statusDataReceived;
     int sent,acknowledged;
+    int statusSent,statusAcknowledged;
+    OledRuntimeStatus pendingStatus,completedStatus;
     string error;
     internal int ProcessId {get;private set;}
     internal int FramesSubmitted {get{lock(state)return sent;}}
+    internal int StatusQueriesSubmitted {get{lock(state)return statusSent;}}
     internal bool IsStopped {get{int code;return TryExited(out code);}}
     static ProcessStartInfo StartInfo(string root){return new ProcessStartInfo {FileName=Path.Combine(root,"bin","G9Device.exe"),Arguments="oled-stream",WorkingDirectory=root};}
     internal G9OledWorker(string root,Action<string> logger):this(StartInfo(root),logger,30000){}
@@ -58,21 +62,44 @@ internal sealed class G9OledWorker : IDisposable {
             if(disposed||error!=null)return;
             if(line=="OLED_STREAM_READY"){
                 if(ready){error="Повторное приветствие вспомогательного процесса OLED.";invalid=true;}else ready=true;
-            }else if(line.StartsWith("OLED_FRAME_SENT ",StringComparison.Ordinal)){
-                int index;string value=line.Substring(16);
-                if(!Int32.TryParse(value,System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out index)||!ready||index!=acknowledged+1||index>sent){error="Неверное подтверждение передачи OLED.";invalid=true;}
-                else acknowledged=index;
+            }else if(line.StartsWith("OLED_FRAME_SENT",StringComparison.Ordinal)){
+                int index;string value=line.Length>=16?line.Substring(16):"";
+                if(!line.StartsWith("OLED_FRAME_SENT ",StringComparison.Ordinal)||!Int32.TryParse(value,System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out index)||!ready||!framePending||statusPending||index!=acknowledged+1||index!=sent){error="Неверное подтверждение передачи OLED.";invalid=true;}
+                else {acknowledged=index;framePending=false;}
+            }else if(line.StartsWith("OLED_STATUS_",StringComparison.Ordinal)){
+                try{
+                    if(!ready||!statusPending||framePending)throw new FormatException("Незапрошенный ответ состояния OLED.");
+                    if(line=="OLED_STATUS_UNSUPPORTED"){
+                        if(statusDataReceived)throw new FormatException("Повторный ответ состояния OLED.");
+                        pendingStatus=null;statusDataReceived=true;
+                    }else if(line.StartsWith("OLED_STATUS_DATA ",StringComparison.Ordinal)){
+                        if(statusDataReceived)throw new FormatException("Повторный ответ состояния OLED.");
+                        string encoded=line.Substring(17);
+                        if(encoded.Length!=176)throw new FormatException("Неверный размер состояния OLED.");
+                        byte[] payload=Convert.FromBase64String(encoded);
+                        if(payload.Length!=132||Convert.ToBase64String(payload)!=encoded)throw new FormatException("Неверная кодировка состояния OLED.");
+                        pendingStatus=OledRuntimeStatusCodec.Decode(payload,DateTimeOffset.UtcNow);statusDataReceived=true;
+                    }else if(line.StartsWith("OLED_STATUS_SENT ",StringComparison.Ordinal)){
+                        int index;
+                        if(!Int32.TryParse(line.Substring(17),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out index)||!statusDataReceived||index!=statusAcknowledged+1||index!=statusSent)throw new FormatException("Неверное подтверждение состояния OLED.");
+                        // A DATA/UNSUPPORTED line alone never completes the query.
+                        completedStatus=pendingStatus;pendingStatus=null;
+                        statusAcknowledged=index;statusPending=false;statusDataReceived=false;
+                    }else throw new FormatException("Неизвестный ответ состояния OLED.");
+                }catch(FormatException problem){error=problem.Message;pendingStatus=completedStatus=null;invalid=true;}
+                catch(InvalidDataException problem){error=problem.Message;pendingStatus=completedStatus=null;invalid=true;}
             }
         }
         Signal();if(invalid)RequestKill();
-        if(!line.StartsWith("OLED_SEND ",StringComparison.Ordinal)&&!line.StartsWith("OLED_FRAME_SENT ",StringComparison.Ordinal))SafeLog(line);
+        if(!line.StartsWith("OLED_SEND ",StringComparison.Ordinal)&&!line.StartsWith("OLED_FRAME_SENT",StringComparison.Ordinal)&&!line.StartsWith("OLED_STATUS_",StringComparison.Ordinal))SafeLog(line);
     }
     string FailureText(string problem){int code;return TryExited(out code)&&code==4?
         "Штатная прошивка не поддерживает OL2. Кадр не отправлен; требуется проверенное восстановление перед установкой расширения.":problem;}
-    void WaitFor(bool handshake,int frame){
+    enum Completion { Ready, Frame, Status }
+    void WaitFor(Completion completion,int index){
         var watch=Stopwatch.StartNew();
         for(;;){
-            string problem;lock(state){if(disposed)throw new ObjectDisposedException("OLED session");problem=error;if(problem==null&&(handshake?ready:acknowledged==frame))return;}
+            string problem;lock(state){if(disposed)throw new ObjectDisposedException("OLED session");problem=error;if(problem==null&&(completion==Completion.Ready?ready:completion==Completion.Frame?acknowledged==index:statusAcknowledged==index))return;}
             if(problem!=null)throw new InvalidOperationException(FailureText(problem));
             int code;if(TryExited(out code))throw new IOException(FailureText("Соединение с OLED завершилось до подтверждения передачи."));
             int remaining=timeoutMilliseconds-(int)watch.ElapsedMilliseconds;
@@ -84,13 +111,29 @@ internal sealed class G9OledWorker : IDisposable {
         OledProtocol.ValidateFrame(pixels);byte[] snapshot=(byte[])pixels.Clone();
         lock(sendGate){
             try{
-                WaitFor(true,0);int frame;
+                WaitFor(Completion.Ready,0);int frame;
                 lock(inputGate){
-                    lock(state){if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);frame=++sent;}
+                    lock(state){if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);frame=++sent;framePending=true;}
                     input.WriteLine("FRAME "+Convert.ToBase64String(snapshot));input.Flush();
                 }
-                WaitFor(false,frame);
+                WaitFor(Completion.Frame,frame);
             }catch(Exception error){Fail(error.Message);StopChild(false);throw;}
+        }
+    }
+    internal OledRuntimeStatus ReadRuntimeStatus(){
+        lock(sendGate){
+            try{
+                WaitFor(Completion.Ready,0);int query;
+                lock(inputGate){
+                    lock(state){
+                        if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);
+                        query=++statusSent;statusPending=true;statusDataReceived=false;pendingStatus=completedStatus=null;
+                    }
+                    input.WriteLine("STATUS");input.Flush();
+                }
+                WaitFor(Completion.Status,query);
+                lock(state){if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);return completedStatus;}
+            }catch(Exception problem){Fail(problem.Message);StopChild(false);throw;}
         }
     }
     void StopChild(bool graceful){

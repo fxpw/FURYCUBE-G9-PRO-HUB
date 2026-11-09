@@ -37,10 +37,17 @@ internal static class OledStreaming {
         // READY confirms the existing version-report gate, not boot/recovery
         // compatibility or a visible image. No SET is used for discovery.
         Reply(output, "OLED_STREAM_READY");
-        long frameIndex = 0;
+        long frameIndex = 0, statusIndex = 0;
         for (;;) {
             string line = ReadBoundedLine(input);
             if (line == null || line == "STOP") return 0;
+            if (line == "STATUS") {
+                if (!sender.Capabilities.SupportsRuntimeStatus) Reply(output, "OLED_STATUS_UNSUPPORTED");
+                else Reply(output, "OLED_STATUS_DATA " + Convert.ToBase64String(sender.ReadRuntimeStatusFrame()));
+                statusIndex = checked(statusIndex + 1);
+                Reply(output, "OLED_STATUS_SENT " + statusIndex.ToString(System.Globalization.CultureInfo.InvariantCulture));
+                continue;
+            }
             byte[] frame = DecodeFrame(line);
             // Build/validate all four pages before the first native transfer.
             // Sender keeps this same transport, caches discovery, and initializes
@@ -58,7 +65,7 @@ internal static class OledStreaming {
     static void Reply(TextWriter output, string line) { output.WriteLine(line); output.Flush(); }
 
     static byte[] DecodeFrame(string line) {
-        if (!line.StartsWith(Prefix, StringComparison.Ordinal)) throw new InvalidDataException("Expected FRAME <base64-480bytes> or STOP");
+        if (!line.StartsWith(Prefix, StringComparison.Ordinal)) throw new InvalidDataException("Expected FRAME <base64-480bytes>, STATUS or STOP");
         string encoded = line.Substring(Prefix.Length);
         // 480 is divisible by three, so its canonical Base64 length is exactly
         // 640 with no '=' padding. Reject whitespace/other data before decoding.

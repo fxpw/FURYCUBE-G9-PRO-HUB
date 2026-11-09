@@ -5,14 +5,17 @@ using System.Text;
 using Furycube.G9.Oled;
 
 internal static class OledStreamTests {
-    sealed class FakeTransport : IOledTransport {
+    sealed class FakeTransport : IOledTransport, IOledRuntimeStatusTransport {
         internal int Reads, Attempts, FailAt;
         internal ushort Pid = 0x2148;
         internal byte[] Version = new byte[] { 11, 5, 1, 1, 8, (byte)'O', (byte)'L', (byte)'2' };
         internal readonly List<byte[]> Writes = new List<byte[]>();
+        internal int StatusReads;
+        internal byte[] StatusReply = Convert.FromBase64String("IoRHUwMBAgOADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADcn");
         public ushort VendorId { get { return 0x1D57; } }
         public ushort ProductId { get { return Pid; } }
         public byte[] ReadFirmwareVersion() { Reads++; return Version; }
+        public byte[] ReadRuntimeStatus() { StatusReads++; return (byte[])StatusReply.Clone(); }
         public void SendFeature(byte[] report) {
             Attempts++;
             if (FailAt == Attempts) throw new IOException("Simulated disconnected original handle");
@@ -77,6 +80,25 @@ internal static class OledStreamTests {
     }
     static int Main() { try {
         CheckByteTransport();
+        var oldStatus = new FakeTransport(); var oldStatusOutput = new StringWriter();
+        OledStreaming.Run(new StringReader("STATUS\nSTATUS\nSTOP\n"),oldStatusOutput,oldStatus,delegate(int value){});
+        Check(oldStatus.Reads==1&&oldStatus.StatusReads==0&&oldStatus.Writes.Count==0,"OL2 STATUS never invokes GET22 or any image report");
+        Check(oldStatusOutput.ToString().Replace("\r\n","\n")=="OLED_STREAM_READY\nOLED_STATUS_UNSUPPORTED\nOLED_STATUS_SENT 1\nOLED_STATUS_UNSUPPORTED\nOLED_STATUS_SENT 2\n",
+            "OL2 unsupported result precedes independent status ACKs");
+        var modern=new FakeTransport();modern.Version[7]=(byte)'3';var modernOutput=new StringWriter();
+        OledStreaming.Run(new StringReader("STATUS\n"+Frame(1,0)+"\nSTATUS\n"+Frame(2,0)+"\nSTOP\n"),modernOutput,modern,delegate(int value){});
+        string expectedModern="OLED_STREAM_READY\nOLED_STATUS_DATA "+Convert.ToBase64String(modern.StatusReply)+"\nOLED_STATUS_SENT 1\nOLED_FRAME_SENT 1\nOLED_STATUS_DATA "+Convert.ToBase64String(modern.StatusReply)+"\nOLED_STATUS_SENT 2\nOLED_FRAME_SENT 2\n";
+        Check(modernOutput.ToString().Replace("\r\n","\n")==expectedModern,"OL3 status DATA precedes ACK with separate frame/status counters");
+        Check(modern.Reads==1&&modern.StatusReads==2&&modern.Writes.Count==8,"OL3 same transport and one discovery across STATUS/FRAME interleaving");
+        Check(modern.Writes[0][9]==1&&modern.Writes[4][9]==0,"status queries do not reinitialize the next frame");
+        var corruptStatus=new FakeTransport();corruptStatus.Version[7]=(byte)'3';corruptStatus.StatusReply[130]^=1;
+        var corruptOutput=new StringWriter();var corruptInput=new TrackedReader("STATUS\n"+Frame(1,0)+"\n");
+        try{OledStreaming.Run(corruptInput,corruptOutput,corruptStatus,delegate(int value){});throw new Exception("FAIL accepted corrupt status");}
+        catch(FormatException){checks++;}
+        Check(corruptStatus.StatusReads==1&&corruptStatus.Writes.Count==0&&corruptInput.Consumed==7,"malformed status stops without retry or consuming following frame");
+        Check(corruptOutput.ToString().Replace("\r\n","\n")=="OLED_STREAM_READY\n","malformed status has no DATA or false ACK");
+        Reject("STATUS ","status trailing whitespace");
+        Reject("STATUS extra","status unexpected arguments");
         var transport = new FakeTransport(); var output = new StringWriter(); var delays = new List<int>();
         int result = OledStreaming.Run(new StringReader(Frame(0x81, 0xF) + "\r\n" + Frame(0x42, 1) + "\nSTOP\n" + Frame(3, 0)),
             output, transport, delegate(int value) { delays.Add(value); });

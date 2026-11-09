@@ -7,6 +7,7 @@ using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using Furycube.G9.Screen;
 using Furycube.G9.Sensors;
+using Furycube.G9.Oled;
 
 internal sealed class G9ScreenEditor : UserControl {
     ScreenProject project=new ScreenProject();
@@ -42,6 +43,8 @@ internal sealed class G9ScreenEditor : UserControl {
     readonly ToolTip tips=new ToolTip {AutoPopDelay=12000,InitialDelay=400,ReshowDelay=100};
     readonly Action<string> report;
     readonly Func<byte[],Task<string>> sendFrame;
+    readonly Func<Task<OledRuntimeStatus>> readRuntimeStatus;
+    OledRuntimeStatus runtimeStatus;
     Button upload;
     readonly CheckBox live=new CheckBox {Text="Обновлять OLED каждую секунду",AutoSize=true};
     bool uploading;
@@ -71,8 +74,8 @@ internal sealed class G9ScreenEditor : UserControl {
         internal GeometrySlider(string value){title=value;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
         internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+" px";}
     }
-    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null){
-        report=logger;sendFrame=frameSender;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
+    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null){
+        report=logger;sendFrame=frameSender;readRuntimeStatus=runtimeStatusReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
         autosaveFile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
         BuildLayout();BindEvents();bool restored=RestoreAutosave();
         syncing=true;try{preset.SelectedIndex=restored?-1:0;}finally{syncing=false;}
@@ -189,8 +192,8 @@ internal sealed class G9ScreenEditor : UserControl {
         case WidgetKind.Text:return "Короткая надпись. Её размер и положение задаются на соседней вкладке.";
         case WidgetKind.Clock:return "Время и дата компьютера. По умолчанию используются 24 часа и русский язык.";
         case WidgetKind.Battery:return "Уровень заряда мыши. Если устройство не передаёт значение, показывается прочерк.";
-        case WidgetKind.Dpi:return "Число точек на дюйм. Пока точное значение не прочитано из подтверждённого источника, показывается прочерк. Номер уровня — отдельный виджет.";
-        case WidgetKind.DpiStage:return "Текущий уровень DPI (1–8), который сообщает сама мышь. Это номер настройки, а не число точек на дюйм. До первого сообщения показывается прочерк.";
+        case WidgetKind.Dpi:return "Настроенное число точек на дюйм. Считывается из мыши перед передачей на OLED, если прошивка поддерживает этот ответ. Без свежего ответа показывается прочерк. Номер уровня — отдельный виджет.";
+        case WidgetKind.DpiStage:return "Последний уровень DPI (1–8), сообщённый мышью. Это номер настройки, а не число точек на дюйм. При уведомлении о смене профиля значение сбрасывается до нового сообщения.";
         case WidgetKind.CpuPercent:return "CPU — процессор компьютера. Показывается его текущая загрузка в процентах.";
         case WidgetKind.RamPercent:return "ОЗУ (RAM) — оперативная память. Показывается доля занятой памяти.";
         case WidgetKind.GpuPercent:return "GPU — видеокарта. Показывается загрузка графического процессора.";
@@ -226,7 +229,9 @@ internal sealed class G9ScreenEditor : UserControl {
     void MoveDrag(object sender,MouseEventArgs e){if(!dragging||SelectedLayer()==null)return;Point p=CanvasPoint(e.Location);Rectangle b=LayerBounds();b.X=Math.Max(0,Math.Min(project.Width-1,p.X-dragOffset.X));b.Y=Math.Max(0,Math.Min(project.Height-1,p.Y-dragOffset.Y));SetBounds(b);}
     void AddWidget(){var w=new ScreenWidget {Kind=WidgetKind.Text,X=0,Y=Math.Max(0,project.Height/2),Width=project.Width,Height=Math.Max(1,project.Height/2),FontSize=9,Text="Новый текст"};project.Widgets.Add(w);if(project.Composition==CompositionMode.Image)project.Composition=CompositionMode.ImageAndWidgets;SyncControls(w,false);editingTabs.SelectedIndex=0;Changed();text.Focus();text.SelectAll();}
     void RemoveLayer(){LayerItem selected=SelectedLayer();if(selected==null)return;if(selected.Image){project.ImageFile=null;project.ImageX=project.ImageY=project.ImageWidth=project.ImageHeight=0;if(project.Composition!=CompositionMode.Widgets)project.Composition=CompositionMode.Widgets;}else project.Widgets.Remove(selected.Widget);SyncControls(null,false);Changed();}
-    WidgetContext Context(){var mouse=telemetry.Snapshot;return new WidgetContext {Now=DateTime.Now,CultureName=project.CultureName,BatteryPercent=mouse==null?null:(double?)mouse.BatteryPercent,Dpi=mouse==null?null:mouse.Dpi,DpiStage=mouse==null?null:mouse.DpiStage,CpuPercent=snapshot==null?null:snapshot.CpuUsagePercent,RamPercent=snapshot==null?null:snapshot.RamUsagePercent,GpuPercent=snapshot==null?null:snapshot.GpuUsagePercent,CpuTemperatureC=snapshot==null?null:snapshot.CpuTemperatureCelsius,GpuTemperatureC=snapshot==null?null:snapshot.GpuTemperatureCelsius};}
+    int? FreshConfiguredDpi(){return runtimeStatus!=null&&runtimeStatus.IsValid&&!runtimeStatus.IsBusy&&runtimeStatus.IsFresh(DateTimeOffset.UtcNow)&&runtimeStatus.ConfiguredDpi.HasValue?(int?)runtimeStatus.ConfiguredDpi.Value:null;}
+    bool UsesNumericDpi(){if(project.Composition==CompositionMode.Image)return false;foreach(var widget in project.Widgets)if(widget.Kind==WidgetKind.Dpi)return true;return false;}
+    WidgetContext Context(){var mouse=telemetry.Snapshot;return new WidgetContext {Now=DateTime.Now,CultureName=project.CultureName,BatteryPercent=mouse==null?null:(double?)mouse.BatteryPercent,Dpi=FreshConfiguredDpi(),DpiStage=mouse==null?null:mouse.DpiStage,CpuPercent=snapshot==null?null:snapshot.CpuUsagePercent,RamPercent=snapshot==null?null:snapshot.RamUsagePercent,GpuPercent=snapshot==null?null:snapshot.GpuUsagePercent,CpuTemperatureC=snapshot==null?null:snapshot.CpuTemperatureCelsius,GpuTemperatureC=snapshot==null?null:snapshot.GpuTemperatureCelsius};}
     async Task RefreshSensors(){if(sampling||IsDisposed||disposedEditor)return;sampling=true;try{snapshot=await Task.Run(()=>sensors.Sample());if(!IsDisposed&&!disposedEditor)Render();}catch(Exception e){if(!IsDisposed&&!disposedEditor)info.Text="Датчики: "+e.Message;}finally{sampling=false;}}
     void ApplyPreset(int index){
         project.Composition=CompositionMode.Widgets;project.Widgets.Clear();int half=Math.Max(1,project.Width/2),top=Math.Max(1,project.Height/2),bottom=Math.Max(1,project.Height-top);
@@ -264,9 +269,19 @@ internal sealed class G9ScreenEditor : UserControl {
     async Task UploadFrame(bool quiet=false){
         if(uploading||sendFrame==null)return;Render();if(current==null)return;
         if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";Render();return;}
-        byte[] pixels=(byte[])current.Buffer.Clone();uploading=true;upload.Enabled=false;oledNote="Проверяю прошивку и передаю кадр…";Render();
-        try{oledNote=await sendFrame(pixels);if(live.Checked)oledNote+=" Автообновление включено; HUB должен работать.";if(!quiet)Log(oledNote);}
-        catch(Exception error){live.Checked=false;oledNote="Передача остановлена: "+error.Message;Log(oledNote);}
+        uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
+        try{
+            // STATUS is requested only by an explicit upload/live tick which
+            // actually renders numeric DPI. Preview/sensors never query it.
+            if(UsesNumericDpi()&&readRuntimeStatus!=null)runtimeStatus=await readRuntimeStatus();
+            if(IsDisposed||disposedEditor)return;
+            if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";return;}
+            Render();if(current==null){live.Checked=false;return;}
+            byte[] pixels=(byte[])current.Buffer.Clone();
+            oledNote=await sendFrame(pixels);if(IsDisposed||disposedEditor)return;
+            if(live.Checked)oledNote+=" Автообновление включено; HUB должен работать.";if(!quiet)Log(oledNote);
+        }
+        catch(Exception error){runtimeStatus=null;if(!IsDisposed&&!disposedEditor){live.Checked=false;oledNote="Передача остановлена: "+error.Message;Log(oledNote);}}
         finally{uploading=false;if(!IsDisposed&&!disposedEditor){upload.Enabled=true;Render();}}
     }
     void ChooseImage(){using(var dialog=new OpenFileDialog {Filter="Картинки|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff"})if(dialog.ShowDialog(this)==DialogResult.OK){project.ImageFile=dialog.FileName;if(project.Composition==CompositionMode.Widgets)project.Composition=project.Widgets.Count>0?CompositionMode.ImageAndWidgets:CompositionMode.Image;SyncControls(null,true);Changed();}}
