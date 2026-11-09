@@ -118,6 +118,8 @@ commands. OLED transfer is wired-only. These commands do not install firmware.
 Current milestones: [PLAN.md](PLAN.md).
 Firmware preparation and recovery status: [docs/FIRMWARE.md](docs/FIRMWARE.md).
 Recovery requirements before any installation: [docs/RECOVERY.md](docs/RECOVERY.md).
+Detailed research: [hardware identity](docs/HARDWARE-IDENTITY.md),
+[normal USB readback](docs/USB-READBACK.md), [UART/security](docs/RECOVERY-UART.md).
 Mouse telemetry sources: [docs/TELEMETRY.md](docs/TELEMETRY.md).
 OLED wire format and ARM extension: [firmware/OLED-PROTOCOL.md](firmware/OLED-PROTOCOL.md).
 Research emulators require Python, Capstone, Unicorn, and a separately obtained

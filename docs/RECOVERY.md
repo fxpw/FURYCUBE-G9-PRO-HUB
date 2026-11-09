@@ -12,6 +12,15 @@ The GUI, input diagnosis, offline emulation, candidate preparation and source
 publication can continue while flashing remains blocked. Candidate files have
 `.exe.disabled` names and must not be launched as a recovery experiment.
 
+**Do not enter the OEM USB loader as a harmless probe.** Its application entry
+routine writes the same logical flash base used by onboard macros. The
+read/erase/write analysis below adds a configuration-loss risk before an app
+update has even started.
+
+**Controller identity is unresolved.** FURYCUBE's product page names **BK3533**;
+the BK3633 SDK is a research lead, not proof of the installed chip or compatible
+programming commands. See [hardware identity](HARDWARE-IDENTITY.md).
+
 ## What is actually established
 
 | Item | Evidence | Current limit |
@@ -52,6 +61,29 @@ firmware backup and an independent way to enter the programming interface.
 Matching PID, firmware version `1.08`, valid CRC blocks, the OL2 marker, or a
 successful offline emulator run does not prove recovery or boot compatibility.
 
+## Entering the loader can modify macro storage
+
+Offline analysis of the pinned official app found both of these paths:
+
+| Path | Arguments established from original instructions |
+|---|---|
+| Onboard macro read, `0x30FFA` | Calls `0x39BC2` at `0x7D000 + index * 0x80`, length 108, with index clamped to 0–31 |
+| Software update entry, `0x39446` | Calls `0x39CB0` with the marker at `0x447EC`, destination `0x7D000`, length 16 |
+
+These are the same logical flash address space: `0x39CB0` uses the same read
+backend to save 1024 bytes, calls its erase helper with length 4096, patches the
+16 marker bytes and writes back 1024 bytes. The erase path issues controller
+command `0x2D07D000`; the related SDK identifies the sector-erase opcode as a
+4 KiB operation. Under that sector geometry, the marker replaces the start of
+zero-based macro index 0 (host slot 1), and the remaining 3 KiB of the erased sector are not restored by
+this routine. The SDK/controller-identity limitation above still applies.
+
+This is an **offline code finding**, not a destructive test on the user's mouse.
+The physical erase effect has not been measured. It is enough to rule out a
+trial update-mode transition while a complete backup is missing. Settings must
+be protected before loader entry, not only before the updater's main erase.
+The ordinary-USB readback audit is in [USB-READBACK.md](USB-READBACK.md).
+
 ## Application startup and button combinations
 
 The string `key press before cpu reset` at `0x2A234` was checked in context. Its
@@ -67,6 +99,10 @@ found in the official firmware archive or support material reviewed so far.
 This is a bounded negative finding, not proof that such a mode cannot exist.
 
 ## A plausible hardware route, not yet a mouse recovery procedure
+
+The separate [UART reader/security audit](RECOVERY-UART.md) identifies concrete
+tools, the full-range read limitation, and permanent download/debug protection
+documented for the researched SDK. Its prerequisites remain unresolved on this mouse.
 
 Beken's BK3633 product page explicitly lists UART download support, SiP flash
 and security features including code encryption and secure JTAG. Those features
@@ -88,6 +124,22 @@ No PCB pinout has been verified. Chip GPIO signal names in a generic datasheet
 are not enough to identify safe connection points, voltage levels, power/reset
 sequencing or a mode-selection strap on the mouse. No wiring or random button
 combination is prescribed by this document.
+
+## Preserved partial baseline
+
+A separate local copy of the last validated 59-byte button table and the pinned
+original updater is kept outside the source checkout under
+`%LOCALAPPDATA%\FURYCUBE-G9-PRO\recovery`. The table is also available in the
+ordinary `backups` directory for the HUB's button-table restore dialog. The
+copied updater keeps an `.exe.disabled` extension and is only a reference.
+
+The baseline was derived from an existing validated device-read capture; saving
+it issued no new device command. Checks cover its header, checksum, preserved
+left click and exact byte roundtrip. Its manifest explicitly says **not a full
+installed firmware backup**. It contains no bootloader, stack, complete macro
+bank, pairing/calibration state or protected NVM. A successful button-table
+restore would not prove complete device recovery. These local files are not
+published.
 
 ## Evidence needed before the flashing gate can be cleared
 

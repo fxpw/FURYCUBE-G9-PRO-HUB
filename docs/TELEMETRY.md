@@ -43,18 +43,24 @@ stage-to-DPI table for the same device/profile before a numeric DPI widget can b
 enabled. `TelemetrySnapshot.Dpi` therefore remains null; `DpiStage` is available
 as a separate, accurately labelled value.
 
-Reading stock `GET10` is **not** a neutral runtime-DPI observer. The read FSM at
-`0x342C2..0x34310` requests a flash profile load before serving the report, then
-`0x33C9A..0x33CA6` reloads the active profile. Consequently, its stage field is a
-saved/profile snapshot and the operation can change RAM configuration. Do not
-poll it to keep a live widget fresh.
+Reading stock report **`0x0A` (decimal 10)** is **not** a neutral runtime-DPI
+observer. Selectors 1–5 request a flash profile load before serving the report;
+selector 0 skips that requested-profile load and takes a RAM snapshot instead.
+Both paths still reach the active-profile restore at `0x33C9A..0x33CA6`, which
+can change RAM configuration after constructing the reply. Do not poll it to
+keep a live widget fresh. See the [readback audit](USB-READBACK.md).
+
+Do not confuse report `0x0A` with **`0x10` (decimal 16)**: the latter reaches
+software update entry and must not be probed. The passive input packet
+`03 C9 10 stage 00` uses `0x10` as a subcommand inside input report `0x03`;
+it is not a request to read feature report `0x10`.
 
 For future offline parsing, its proven query is `A0 0A 78 00 01 00 00 00`,
 logical reply120 bytes, profile1 selector. It must use the same strict
 idle/grant/single-GET discipline as other known feature reads. The reply's
 three-byte header precedes117 RAM bytes beginning at `0x401038`; DPI stage is
 reply byte26 (RAM `0x40104F`). This is documentation, not permission or a new
-send allowlist entry. No GET10 code was added to the standalone client.
+send allowlist entry. No `GET 0x0A` code was added to the standalone client.
 
 The shared web3311 decoder is unsuitable as an unquestioned reference: its
 lookup table contains an out-of-byte value404 and duplicated entries, and its
