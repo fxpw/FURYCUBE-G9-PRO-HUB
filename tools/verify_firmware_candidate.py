@@ -8,11 +8,12 @@ import argparse
 import hashlib
 import json
 import pefile
+from check_firmware_header import validate_header, EDITABLE_HEADER_OFFSETS
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_EXE_HASH = '558031de581d5ba2317abd367c793776def812f4ec7eff6cff86850658748be4'
 SOURCE_BIN_HASH = 'f7c4db8ffae37d033cbde4d670d70f32bd9ea62b36d0e6d7ba9cba5ce7d9efcc'
-PATCH_BIN_HASH = 'e6aa7cfd6c2a1b91036014b4908a0f9d8aabf6f155922a172bbf655dbf2b368d'
+PATCH_BIN_HASH = '01908b65a972ae04282392088e2581640365a0d0712c9f281d6f54691ea14865'
 
 def digest(data):
     return hashlib.sha256(data).hexdigest()
@@ -72,11 +73,14 @@ def main():
     candidate_pe = pefile.PE(str(args.candidate))
     before, after = resource(source_pe), resource(candidate_pe)
     assert digest(before) == SOURCE_BIN_HASH
+    validate_header(before)
+    header = validate_header(after)
     assert digest(after) == PATCH_BIN_HASH
     assert len(before) == len(after) == 134140
     changes = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
-    assert changes == [0xa212, 0xa213, 0xa216, 0xa217], changes
-    assert before[:16] == after[:16]
+    assert changes == [0, 1, 2, 3, 0xa212, 0xa213, 0xa216, 0xa217], changes
+    assert all(before[i] == after[i] for i in range(16) if i not in EDITABLE_HEADER_OFFSETS)
+    assert before[6:8] == after[6:8]  # The no-wait candidate has no size change.
     assert before[0xa212:0xa214] == bytes.fromhex('0d70')
     assert after[0xa212:0xa214] == bytes.fromhex('c046')
     assert before[0xa216:0xa218] == bytes.fromhex('53aa')
@@ -93,6 +97,8 @@ def main():
         'source_resource_sha256': SOURCE_BIN_HASH,
         'patched_resource_sha256': PATCH_BIN_HASH,
         'resource_changes': [hex(i) for i in changes],
+        'header_crc32_length': header,
+        'header_other_10_bytes_preserved': True,
         'valid_crc16_cms_blocks': 3939,
         'non_resource_sections_unchanged': list(before_sections),
         'behavior': 'Disable OLED hold gesture; leave global debounce unchanged',

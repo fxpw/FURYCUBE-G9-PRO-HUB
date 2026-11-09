@@ -10,6 +10,17 @@ client work; the firmware changes have passed offline checks but have **not
 been installed or validated on the development mouse**. The application does
 not flash firmware automatically.
 
+Firmware preparation now recalculates the image header's body CRC32 and word
+length, in addition to each changed block's CRC16. Older candidates with an
+unchanged header are superseded; see [header validation](docs/FIRMWARE-HEADER.md).
+
+The development mouse's replacement board photos now identify **BK3633QN48**,
+**EPC-V18U0002**, printed **2025-4-3**, with a **PAW3311DB-T2MU** sensor. Earlier
+reference pictures were another mouse and are excluded. This identifies the
+visible hardware; full flash readback, board programming connections, installed
+boot/security state and recovery are still unproven. Other revisions are not
+qualified by a shared product name. See [hardware evidence](docs/HARDWARE-IDENTITY.md).
+
 ## Get started
 
 Windows 10/11 x64 with .NET Framework 4.x. No Visual Studio, Python, vendor HUB,

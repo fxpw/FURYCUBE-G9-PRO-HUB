@@ -45,7 +45,8 @@ identity with the installed image. Matching normal PID `1D57:2148`, version 1.08
 or HID capabilities is insufficient to establish the complete installed image,
 board revision, bootloader or chip security state. In particular, manufacturer
 G9 material names BK3533, while earlier platform research used BK3633 documents;
-that hardware identification remains qualified. The in-image control/data-flow
+the user's later actual-unit photos identify BK3633QN48 and EPC-V18U0002.
+The installed boot/security state remains unproven. The in-image control/data-flow
 findings here do not require assuming that those chip names are interchangeable.
 
 The receiver `1D57:FA60` is a separate transport and firmware image. Its relay

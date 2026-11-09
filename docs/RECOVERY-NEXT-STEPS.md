@@ -5,6 +5,14 @@ proven app-independent full restore. Firmware installation remains blocked.**
 The user reports that the bottom has **no FCC ID**; do not ask for that label
 again or treat an indexed FCC filing as a match to the user's unit.
 
+**Subsequent hardware evidence:** the user withdrew the first two reference
+photos as another mouse and supplied five actual-unit photos plus transcription.
+They identify `BK3633QN48`, `EPC-V18U0002`, `2025-4-3`, `PAW3311DB-T2MU` and `A3311`.
+The BK3533/BK3633 identity question below is now resolved for that photographed
+unit; the old search record is retained as history, not a request for more FCC
+or chip-name evidence. Board routing, safe entry, protection and full restoration
+remain unproven. See [updated hardware identity](HARDWARE-IDENTITY.md).
+
 This pass used existing files, static PE/firmware inspection, primary web
 sources and isolated original-function emulation with all I/O replaced. It did
 not launch any vendor executable, open a programming connection,
@@ -261,6 +269,12 @@ PASS merely because USB PID/version or an application checksum matches.
 
 ## Smallest next evidence request, without repeating FCC questions
 
+The chip-name/board-photo part of this request was subsequently supplied as
+described above. Further action should target the missing board routing and
+reader/entry guarantees, not ask the user to transcribe the same IC again. The
+prepared service message below is an earlier alternative, not an action that
+must precede the user's chosen board investigation. No message has been sent.
+
 The lowest-impact next step is a **manufacturer service answer**, not a USB
 experiment. The current [FURYCUBE contact page](https://www.furycube.com/pages/contact)
 lists `service@furycube.com` for other support. Beken also lists technical
@@ -287,9 +301,11 @@ to connect a programmer, short pads, scrape coatings, remove an IC, or guess a
 strap. Neither a generic mouse picture nor another product's PCB substitutes
 for this unit. No G9 disassembly/pad-wiring procedure has been verified here.
 
-After a matched board pinout and compatible reader are obtained, qualification
-of app-independent entry and two strictly read-only dumps can be planned. A
-matching spare board or an exact manufacturer restore procedure is needed to
-test restoration without making the only working mouse the destructive test
-fixture. Until that chain exists, **no full backup, no proven full recovery,
-and no firmware installation** remains the correct status.
+For the full-dump route, a matched board pinout, compatible reader and
+app-independent entry must precede two read-only acquisitions and restoration
+qualification. A matching spare board or exact manufacturer procedure can avoid
+using the only working mouse for a destructive test. Alternatively, verified
+USB app-only rollback can suffice if entry survives the relevant app failure,
+the exact stock app is available, and every other affected byte is preserved
+or restorable. Neither route is established. **No proven complete recovery and
+no firmware installation** remains the current status.

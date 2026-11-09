@@ -16,9 +16,9 @@ jobs:
       - name: Build HUB and run offline checks
         shell: cmd
         run: build.cmd
-      - name: Validate offline backup archive toolkit
+      - name: Validate offline backup and source-protocol codecs
         shell: pwsh
-        run: python -m unittest discover -s tests -p test_backup_archive.py -v
+        run: python -m unittest discover -s tests -p "test_*.py" -v
       - name: Package own applications
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

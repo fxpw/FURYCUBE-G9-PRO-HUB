@@ -19,7 +19,7 @@ internal static class FirmwareOl3Tests {
             var oldPrefix = new byte[280]; Buffer.BlockCopy(payload,0,oldPrefix,0,oldPrefix.Length);
             Check(G9FirmwarePatch.Hash(oldPrefix) == G9FirmwareOl3Patch.Ol2PrefixHash, "original OL2 prefix remains byte-identical");
             Check(G9FirmwareOl3Patch.OriginalBlocks == 3939 && G9FirmwareOl3Patch.NewBlocks == 20 &&
-                G9FirmwareOl3Patch.CandidateSize == 16 + 3959 * 34, "exact framed geometry and20 new blocks");
+                G9FirmwareOl3Patch.CandidateSize == 16 + 3959 * 34 + 2, "exact framed geometry,20 new blocks and2 FF word-alignment bytes");
             Reject(delegate { G9FirmwareOl3Patch.BuildResource(null,payload); }, "missing source resource");
             Reject(delegate { G9FirmwareOl3Patch.BuildResource(new byte[134139],payload); }, "wrong original resource size");
             string fixture = Path.Combine(root,"evidence","firmware-readonly");
@@ -32,9 +32,16 @@ internal static class FirmwareOl3Tests {
             Check(G9FirmwarePatch.Hash(before) == G9FirmwareOl3Patch.OriginalUpdaterHash,"pinned official updater");
             byte[] original = G9FirmwarePatch.ReadBinResource(sources[0],G9FirmwareOl3Patch.OriginalSize);
             byte[] candidate = G9FirmwareOl3Patch.BuildResource(original,payload);
-            Check(candidate.Length == 134622,"exact candidate size");
+            Check(candidate.Length == 134624,"exact candidate size");
             Check(G9FirmwarePatch.Hash(candidate) == G9FirmwareOl3Patch.CandidateResourceHash,"exact independent Python/ARM candidate hash");
-            for (int index=0;index<16;index++) Check(candidate[index] == original[index],"unchanged header byte"+index);
+            G9FirmwarePatch.ValidateImageHeader(original); checks++;
+            G9FirmwarePatch.ValidateImageHeader(candidate); checks++;
+            Check(BitConverter.ToUInt16(candidate,6)==33656,"exact corrected length in words");
+            Check(BitConverter.ToUInt32(candidate,0)==0x30EB4770u,"exact independently computed body CRC32");
+            Check(candidate[candidate.Length-2]==255 && candidate[candidate.Length-1]==255,"FF word alignment");
+            for (int index=4;index<16;index++) if(index!=6 && index!=7) Check(candidate[index] == original[index],"preserved header identity/status byte"+index);
+            byte[] staleHeader=(byte[])candidate.Clone(); Buffer.BlockCopy(original,0,staleHeader,0,16);
+            Reject(delegate { G9FirmwarePatch.ValidateImageHeader(staleHeader); },"oldOL3 staleheader regression");
             byte[] corrupt = (byte[])payload.Clone(); corrupt[0] ^= 1;
             Reject(delegate { G9FirmwareOl3Patch.BuildResource(original,corrupt); },"changed own payload");
             Reject(delegate { G9FirmwareOl3Patch.BuildResource(original,null); },"missing own payload");
@@ -47,7 +54,7 @@ internal static class FirmwareOl3Tests {
             string output = G9FirmwareOl3Patch.Prepare(root);
             string packed = Path.Combine(output,"FURYCUBE-G9-PRO-OL3-candidate.exe.disabled");
             Check(File.Exists(packed) && packed.EndsWith(".exe.disabled",StringComparison.Ordinal),"disabled updater saved without execution");
-            Check(G9FirmwarePatch.Hash(G9FirmwarePatch.ReadBinResource(packed,134622)) == G9FirmwareOl3Patch.CandidateResourceHash,"repacked resource readback");
+            Check(G9FirmwarePatch.Hash(G9FirmwarePatch.ReadBinResource(packed,134624)) == G9FirmwareOl3Patch.CandidateResourceHash,"repacked resource readback");
             Check(G9FirmwarePatch.VerifyUnchangedSections(before,File.ReadAllBytes(packed)).Count > 0,"non-resource PE sections preserved");
             byte[] packedBytes = File.ReadAllBytes(packed);
             G9FirmwareOl3Patch.VerifyResourceOnlyChange(before,packedBytes); checks++;

@@ -13,6 +13,7 @@ import json
 import uuid
 from emulate_oled_arm import build, run_regressions, BASE, APPEND, SOURCE_HASH
 from emulate_screen_key import Fixture, OLED_OFF, GESTURE
+from check_firmware_header import seal_header, validate_header, EDITABLE_HEADER_OFFSETS
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT/'evidence/g9pro-official-firmware-resource.bin'
@@ -72,6 +73,7 @@ def verify_input_paths(candidate_image):
 def main():
     raw = SOURCE.read_bytes()
     assert sha(raw) == SOURCE_HASH, 'Source resource hash mismatch'
+    validate_header(raw)
     normalized, blocks, tail = decode_resource(raw)
     assert len(raw) == 134140 and len(blocks) == EXPECTED_BLOCKS and tail == b'\xFF'*198
     assert BASE+len(normalized) == APPEND
@@ -105,18 +107,23 @@ def main():
     for offset in range(0, len(padded_code), 32):
         payload = padded_code[offset:offset+32]
         result.extend(payload + cms(payload).to_bytes(2, 'big'))
-    candidate = bytes(result)
-    assert candidate[:16] == raw[:16], 'Header changed'
-    assert len(candidate) == layout['minimum_resource_size']
+    candidate = seal_header(result)
+    header = validate_header(candidate)
+    header_changes = [i for i in range(16) if candidate[i] != raw[i]]
+    assert set(header_changes) <= EDITABLE_HEADER_OFFSETS
+    resource_padding = (-len(result)) % 4
+    assert len(candidate) == layout['minimum_resource_size']+resource_padding
     assert len(candidate) <= ALIGNED_TRANSFER
     assert (len(raw)+4095)&~4095 == (len(candidate)+4095)&~4095 == ALIGNED_TRANSFER
     decoded, candidate_blocks, candidate_tail = decode_resource(candidate)
-    assert not candidate_tail
+    assert candidate_tail == bytes([255])*resource_padding
     assert len(candidate_blocks) == EXPECTED_BLOCKS+len(padded_code)//32
-    assert decoded == bytes(patched)+padded_code
+    expected_image = bytearray(patched)+padded_code
+    expected_image[:16] = candidate[:16]
+    assert decoded == bytes(expected_image)
     expected_offsets = {record['normalized_offset']+i for record in patch_records
                         for i, (a, b) in enumerate(zip(bytes.fromhex(record['old_hex']), bytes.fromhex(record['new_hex']))) if a != b}
-    actual_offsets = {i for i, (a, b) in enumerate(zip(normalized, decoded)) if a != b}
+    actual_offsets = {i for i, (a, b) in enumerate(zip(normalized, decoded)) if i >= 16 and a != b}
     assert actual_offsets == expected_offsets, 'Unexpected original image modifications'
     expected_blocks = sorted({(offset-16)//32 for offset in expected_offsets})
     assert changed_blocks == expected_blocks and len(changed_blocks) == 3
@@ -140,7 +147,11 @@ def main():
         'original_updater_executed': False,
         'source_resource_sha256': sha(raw), 'candidate_resource_sha256': sha(candidate),
         'source_resource_size': len(raw), 'candidate_resource_size': len(candidate),
-        'header_16_bytes_unchanged': True,
+        'header_16_bytes_unchanged': False,
+        'header_changed_offsets': header_changes,
+        'header_crc32_length': header,
+        'header_other_10_bytes_preserved': True,
+        'container_ff_word_padding_bytes': resource_padding,
         'source_original_crc_blocks': EXPECTED_BLOCKS,
         'candidate_valid_crc_blocks': len(candidate_blocks),
         'only_changed_original_crc_blocks': changed_blocks,
@@ -165,7 +176,7 @@ def main():
     }
     (destination/'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     assert target.read_bytes() == candidate
-    print('PASS: original unchanged; header/3 modified CRC blocks/9 appended CRC blocks/bounds independently checked')
+    print('PASS: original unchanged; header CRC32/length sealed, other10 header bytes preserved; 3 modified/9 appended CRC blocks; same bounds')
     print(json.dumps({'candidate': str(target), 'manifest': str(destination/'manifest.json'),
                       'candidate_sha256': sha(candidate), 'status': manifest['status']}))
 

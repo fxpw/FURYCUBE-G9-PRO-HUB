@@ -13,7 +13,7 @@ using System.Windows.Forms;
 internal static class G9FirmwarePatch {
     internal const string OriginalUpdaterHash = "558031de581d5ba2317abd367c793776def812f4ec7eff6cff86850658748be4";
     internal const string OriginalResourceHash = "f7c4db8ffae37d033cbde4d670d70f32bd9ea62b36d0e6d7ba9cba5ce7d9efcc";
-    internal const string PatchedResourceHash = "e6aa7cfd6c2a1b91036014b4908a0f9d8aabf6f155922a172bbf655dbf2b368d";
+    internal const string PatchedResourceHash = "01908b65a972ae04282392088e2581640365a0d0712c9f281d6f54691ea14865";
     const int ResourceSize = 134140, InstructionOffset = 0xA212, BlockOffset = 0xA1F6, CrcOffset = 0xA216;
     static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
@@ -34,6 +34,34 @@ internal static class G9FirmwarePatch {
     static void Require(bool condition, string message) { if (!condition) throw new InvalidDataException(message); }
     internal static string Hash(byte[] data) {
         using (SHA256 sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(data)).Replace("-", "").ToLowerInvariant();
+    }
+    // img_hdr_t: CRC32 at0, length in 4-byte words at6. CRC covers the
+    // framed body including CRC16 bytes and FF tail, with no final XOR.
+    // Matching this file format does not prove installed-loader acceptance.
+    internal static uint BodyCrc32(byte[] data) {
+        uint crc = 0xFFFFFFFF;
+        for (int i = 16; i < data.Length; i++) {
+            crc ^= data[i];
+            for (int bit = 0; bit < 8; bit++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xEDB88320u : 0u);
+        }
+        return crc;
+    }
+    internal static void ValidateImageHeader(byte[] data) {
+        Require(data != null && data.Length >= 16 && (data.Length & 3) == 0 && data.Length / 4 < 0xFFFF, "Invalid image word length");
+        Require(BitConverter.ToUInt16(data, 6) * 4 == data.Length, "Image header length is stale");
+        Require(BitConverter.ToUInt32(data, 0) == BodyCrc32(data), "Image header body CRC32 is stale");
+    }
+    internal static void SealImageHeader(byte[] data) {
+        Require(data != null && data.Length >= 16 && (data.Length & 3) == 0 && data.Length / 4 < 0xFFFF, "Invalid image word length");
+        ushort words = checked((ushort)(data.Length / 4));
+        data[6] = (byte)words; data[7] = (byte)(words >> 8);
+        uint crc = BodyCrc32(data);
+        for (int i = 0; i < 4; i++) data[i] = (byte)(crc >> (i * 8));
+        ValidateImageHeader(data);
+    }
+    internal static void VerifyPreservedHeaderFields(byte[] before, byte[] after) {
+        for (int i = 4; i < 16; i++)
+            if (i != 6 && i != 7) Require(before[i] == after[i], "Image identity/status field changed");
     }
     static ushort Crc16Cms(byte[] data, int offset, int length) {
         ushort crc = 0xFFFF;
@@ -106,6 +134,24 @@ internal static class G9FirmwarePatch {
             completed = true;
         } finally { if (!completed && update != IntPtr.Zero) EndUpdateResource(update, true); }
     }
+    internal static byte[] BuildNoWaitResource(byte[] original) {
+        Require(original != null && original.Length == ResourceSize && Hash(original) == OriginalResourceHash, "Original BIN resource SHA256/length mismatch");
+        ValidateImageHeader(original);
+        Require(original[InstructionOffset] == 0x0D && original[InstructionOffset + 1] == 0x70, "Original instruction differs");
+        Require(original[CrcOffset] == 0x53 && original[CrcOffset + 1] == 0xAA && Crc16Cms(original, BlockOffset, 32) == 0x53AA,
+            "Original block CRC16/CMS mismatch");
+        byte[] patched = (byte[])original.Clone(); patched[InstructionOffset] = 0xC0; patched[InstructionOffset + 1] = 0x46;
+        ushort crc = Crc16Cms(patched, BlockOffset, 32); Require(crc == 0x3433, "Patched block CRC differs from reviewed value");
+        patched[CrcOffset] = (byte)(crc >> 8); patched[CrcOffset + 1] = (byte)crc;
+        SealImageHeader(patched);
+        VerifyPreservedHeaderFields(original, patched);
+        int changes = 0;
+        for (int i = 0; i < original.Length; i++) if (original[i] != patched[i]) {
+            Require(i < 4 || i == InstructionOffset || i == InstructionOffset + 1 || i == CrcOffset || i == CrcOffset + 1, "Unexpected firmware byte changed"); changes++;
+        }
+        Require(changes == 8 && Hash(patched) == PatchedResourceHash, "Patched resource hash or changed-byte count differs");
+        return patched;
+    }
     internal static string Prepare(string root) {
         root = Path.GetFullPath(root);
         string inputDirectory = Path.Combine(root, "evidence", "firmware-readonly");
@@ -113,19 +159,7 @@ internal static class G9FirmwarePatch {
         Require(matches.Length == 1, "Expected exactly one official Update.exe in evidence/firmware-readonly");
         string sourcePath = matches[0]; byte[] source = File.ReadAllBytes(sourcePath);
         Require(Hash(source) == OriginalUpdaterHash, "Official updater SHA256 mismatch; preparation stopped");
-        byte[] original = ReadBinResource(sourcePath);
-        Require(Hash(original) == OriginalResourceHash, "Original BIN resource SHA256 mismatch");
-        Require(original[InstructionOffset] == 0x0D && original[InstructionOffset + 1] == 0x70, "Original instruction differs");
-        Require(original[CrcOffset] == 0x53 && original[CrcOffset + 1] == 0xAA && Crc16Cms(original, BlockOffset, 32) == 0x53AA,
-            "Original block CRC16/CMS mismatch");
-        byte[] patched = (byte[])original.Clone(); patched[InstructionOffset] = 0xC0; patched[InstructionOffset + 1] = 0x46;
-        ushort crc = Crc16Cms(patched, BlockOffset, 32); Require(crc == 0x3433, "Patched block CRC differs from reviewed value");
-        patched[CrcOffset] = (byte)(crc >> 8); patched[CrcOffset + 1] = (byte)crc;
-        int changes = 0;
-        for (int i = 0; i < original.Length; i++) if (original[i] != patched[i]) {
-            Require(i == InstructionOffset || i == InstructionOffset + 1 || i == CrcOffset || i == CrcOffset + 1, "Unexpected firmware byte changed"); changes++;
-        }
-        Require(changes == 4 && Hash(patched) == PatchedResourceHash, "Patched resource hash or changed-byte count differs");
+        byte[] original = ReadBinResource(sourcePath), patched = BuildNoWaitResource(original);
         string output = Path.Combine(root, "patch-output", DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfffffff'Z'") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8));
         Directory.CreateDirectory(output);
         try {
@@ -141,8 +175,9 @@ internal static class G9FirmwarePatch {
                 schemaVersion = 1, createdUtc = DateTime.UtcNow.ToString("o"), offlineValidation = "PASS", installation = "NOT INSTALLED", physicalValidation = "NOT TESTED",
                 originalUpdater = new { path = sourcePath, sha256 = OriginalUpdaterHash },
                 resource = new { type = "BIN", id = 129, language = 2052, length = ResourceSize, originalSha256 = OriginalResourceHash, patchedSha256 = PatchedResourceHash },
+                imageHeader = new { bodyCrc32Verified = true, wordLengthVerified = true, otherFieldsPreserved = true, installedLoaderAcceptanceVerified = false },
                 patch = new { description = "Disable OLED long-hold toggle; no additional GPIO delay", instructionOffset = "0xA212", originalInstruction = "0D70", patchedInstruction = "C046",
-                    crcAlgorithm = "CRC16/CMS poly=8005 init=FFFF MSB BE", blockOffset = "0xA1F6", blockLength = 32, crcOffset = "0xA216", originalCrc = "53AA", patchedCrc = "3433", changedByteCount = changes },
+                    crcAlgorithm = "CRC16/CMS poly=8005 init=FFFF MSB BE", blockOffset = "0xA1F6", blockLength = 32, crcOffset = "0xA216", originalCrc = "53AA", patchedCrc = "3433", changedByteCount = 8 },
                 candidate = new { path = candidate, sha256 = Hash(File.ReadAllBytes(candidate)), executableExtensionDisabled = true },
                 unchangedPeSections = sections,
                 limits = new { officialEraseRange = "[0x2B000,0x51000)", officialWriteRange = "[0x2B00A,0x4C00A)",
@@ -155,7 +190,7 @@ internal static class G9FirmwarePatch {
                 "FURYCUBE G9 PRO — подготовленное исправление OLED\r\n\r\n" +
                 "Патч подготовлен; в мышь не установлен. Физическая проверка: НЕ ПРОВЕДЕНА.\r\n" +
                 "Изменение: двухбайтовая ARM Thumb NOP отключает переключение режима OLED долгим удержанием кнопки. Дополнительная задержка GPIO не добавлена.\r\n" +
-                "Изменены ровно четыре байта BIN: инструкция 0D70 -> C046 на 0xA212 и CRC16/CMS 53AA -> 3433 на 0xA216.\r\n" +
+                "Изменены инструкция 0D70 -> C046 на 0xA212, CRC16/CMS 53AA -> 3433 на 0xA216 и четыре байта CRC32 тела в заголовке. Длина образа сохранена.\r\n" +
                 "Проверены SHA256 исходного EXE и BIN, CRC блока, итоговый BIN и неизменность всех секций PE кроме .rsrc. Исходный EXE сохранён без изменений.\r\n\r\n" +
                 "ОГРАНИЧЕНИЯ\r\n" +
                 "Полный текущий образ устройства не считан; резервной копии прошивки и проверенного отката нет. PID и версия 1.08 сами по себе не доказывают совместимость образа.\r\n" +

@@ -11,7 +11,7 @@ internal static class G9FirmwareOledPatch {
     internal const string OriginalUpdaterHash = "558031de581d5ba2317abd367c793776def812f4ec7eff6cff86850658748be4";
     internal const string OriginalResourceHash = "f7c4db8ffae37d033cbde4d670d70f32bd9ea62b36d0e6d7ba9cba5ce7d9efcc";
     internal const string PayloadHash = "e7ed5939d60dff19b856092c57d4bef97e0e3ceb01ba8db34ddf0fcf2797320d";
-    internal const string CandidateResourceHash = "f7a38b0a672f88767ad34a04bd3ac1e6f7f9cd62804d6aec6c24278d5e1a75fd";
+    internal const string CandidateResourceHash = "08b277e7b2a6941ac1abe05a53bd36a9836310915461efca610fc98211d22ad0";
     internal const int OriginalSize = 134140, CandidateSize = 134248;
     const int OriginalBlocks = 3939, NewBlocks = 9, RoundedTransferSize = 0x21000;
     const string EmbeddedPayload = "Furycube.G9.OledPayload";
@@ -78,6 +78,7 @@ internal static class G9FirmwareOledPatch {
     }
     internal static byte[] BuildResource(byte[] original, byte[] payload) {
         Require(original != null && original.Length == OriginalSize && Hash(original) == OriginalResourceHash, "Неверный исходный BIN: SHA256/длина");
+        G9FirmwarePatch.ValidateImageHeader(original);
         Require(payload != null && payload.Length == 280 && Hash(payload) == PayloadHash, "Неверный ARM payload: SHA256/длина");
         byte[] image = Decode(original, OriginalBlocks, 198);
         var changed = new HashSet<int>();
@@ -102,9 +103,10 @@ internal static class G9FirmwareOledPatch {
             Buffer.BlockCopy(append, block * 32, candidate, at, 32);
             ushort crc = Cms(candidate, at, 32); candidate[at + 32] = (byte)(crc >> 8); candidate[at + 33] = (byte)crc;
         }
-        Require(Equal(original, 0, candidate, 0, 16), "Заголовок BIN изменён");
+        G9FirmwarePatch.SealImageHeader(candidate);
+        G9FirmwarePatch.VerifyPreservedHeaderFields(original, candidate);
         byte[] verified = Decode(candidate, OriginalBlocks + NewBlocks, 0);
-        Require(Equal(image, 0, verified, 0, image.Length) && Equal(append, 0, verified, image.Length, append.Length), "Проверка декодированного кандидата не прошла");
+        Require(Equal(image, 16, verified, 16, image.Length - 16) && Equal(append, 0, verified, image.Length, append.Length), "Проверка декодированного кандидата не прошла");
         for (int block = 0; block < OriginalBlocks; block++)
             Require(Equal(original, 16 + block * 34, candidate, 16 + block * 34, 34) == !changed.Contains(block), "Неожиданное изменение исходного блока " + block);
         Require(((OriginalSize + 4095) & ~4095) == RoundedTransferSize && ((CandidateSize + 4095) & ~4095) == RoundedTransferSize, "Диапазон передачи увеличился");
@@ -140,7 +142,8 @@ internal static class G9FirmwareOledPatch {
                 schemaVersion = 2, createdUtc = DateTime.UtcNow.ToString("o"), offlineValidation = "PASS", installation = "NOT INSTALLED", physicalValidation = "NOT TESTED",
                 originalUpdater = new { path = originalPath, sha256 = OriginalUpdaterHash, unchanged = true, executed = false },
                 originalResource = new { length = OriginalSize, sha256 = OriginalResourceHash, validCrcBlocks = OriginalBlocks },
-                candidateResource = new { path = rawPath, length = CandidateSize, sha256 = CandidateResourceHash, validCrcBlocks = OriginalBlocks + NewBlocks, header16Unchanged = true,
+                candidateResource = new { path = rawPath, length = CandidateSize, sha256 = CandidateResourceHash, validCrcBlocks = OriginalBlocks + NewBlocks, header16Unchanged = false,
+                    headerCrc32AndWordLengthVerified = true, otherHeaderFieldsPreserved = true, installedLoaderAcceptanceVerified = false,
                     originalChangedBlocks = new[] { (0x988C - 16) / 32, (0xB504 - 16) / 32, (0xB544 - 16) / 32 }, remainingOriginalBlocksByteIdentical = true },
                 patches = patchList,
                 append = new { cpuAddress = "0x47400", normalizedOffset = "0x1EC70", resourceOffset = "0x20B36", payloadBytes = 280, paddedBytes = 288, newCrcBlocks = NewBlocks, sha256 = PayloadHash },
@@ -159,7 +162,7 @@ internal static class G9FirmwareOledPatch {
                 "Подготовлены raw BIN и копия официального обновлятора с окончанием .exe.disabled. Никакой updater не запускался; USB не использовался.\r\n" +
                 "Обычная «0»: отключён OLED-жест удержания; глобальная задержка кнопок не увеличивается. Долгое удержание экранной кнопки больше не переключает OLED.\r\n" +
                 "OLED OL2: настоящий Thumb-1 код, 280 байт, 9 новых CRC-блоков. Страничная запись 120x28 / 480 байт только через кабель. Маркер OL2 читается через штатный GET 0B длиной 8 байт; отсутствие маркера запрещает загрузку.\r\n\r\n" +
-                "Проверены SHA256 оригинального EXE/BIN и ARM payload, все 3939 исходных и 3948 итоговых CRC-блоков, три точных изменения кода, сохранность остальных блоков, неизменность заголовка BIN и всех PE-секций кроме .rsrc. Итоговый raw BIN совпадает с проверенным Python/ARM-кандидатом.\r\n" +
+                "Проверены SHA256 оригинального EXE/BIN и ARM payload, все 3939 исходных и 3948 итоговых CRC-блоков, три точных изменения кода и сохранность остальных блоков. CRC32 тела и длина в заголовке пересчитаны; прочие поля заголовка и PE-секции кроме .rsrc сохранены. Итоговый raw BIN совпадает с проверенным Python/ARM-кандидатом.\r\n" +
                 "Размер BIN 134140 -> 134248; округлённая передача остаётся 0x21000 байт. Официальный updater стирает [0x2B000,0x51000), записывает [0x2B00A,0x4C00A) и не делает резервную копию устройства.\r\n\r\n" +
                 "ОГРАНИЧЕНИЯ: полный текущий образ мыши не считан, проверенного отката нет. PID/версия/маркер OL2 не доказывают совместимость загрузчика или фактическую работу OLED. На устройстве кандидат не проверен. Штатный renderer может перезаписывать картинки; сохранение после выключения/сна не реализовано. Живым виджетам ПК нужна работающая фоновая часть HUB; обычной «0» она не нужна.\r\n\r\n" +
                 "Подробности: oled-patch-report.json. Это подготовка проверяемых файлов, не разрешение и не команда на установку.\r\n", Utf8);

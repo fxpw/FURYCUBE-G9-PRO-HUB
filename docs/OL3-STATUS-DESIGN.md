@@ -146,11 +146,13 @@ are exactly OL2; its page protocol remains GO2. A separate wrapper marks OL3.
 
 - Own machine code 636 bytes, padded to 640: 20 new32-byte data+CMS blocks.
 - Append CPU 0x47400, normalized 0x1EC70, raw resource 0x20B36.
-- Original16-byte header unchanged, 3939 original blocks retained except five
-  changed blocks for the no-wait fix and four hooks.
-- Resource 134622 bytes; aligned updater transfer remains 0x21000 bytes.
+- Header body CRC32 and word length recalculated; the other ten header bytes
+  are preserved. The 3939 original blocks are retained except five changed
+  blocks for the no-wait fix and four hooks.
+- Resource 134624 bytes, including two final FF alignment bytes; aligned updater
+  transfer remains 0x21000 bytes. See [header correction](FIRMWARE-HEADER.md).
 - Payload SHA256 `f9938ccff010dd680f1df37c0b0a97a3a6af6c8aeb12859475ca4dc19eba85ed`.
-- Candidate resource SHA256 `cf4048c67be8e922bf4a129bfec80c988e448867d57cb44e186a9c01ac7af03a`.
+- Candidate resource SHA256 `62ad25dadbc5b3d0fe6ca4383c81ce6259f488c70c20793b568be6e93a8561fb`.
 
 `tools/emulate_ol3_status.py` executes real stock/new instructions.
 `tools/build_ol3_candidate.py` reruns those checks against bytes decoded from

@@ -13,6 +13,7 @@ import uuid
 
 from emulate_ol3_status import build, run_regressions, BASE, APPEND, SOURCE_HASH
 from build_oled_candidate import decode_resource, cms, verify_input_paths
+from check_firmware_header import seal_header, validate_header, EDITABLE_HEADER_OFFSETS
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,7 @@ def sha(data):
 def main():
     original = SOURCE.read_bytes()
     assert len(original) == 134140 and sha(original) == SOURCE_HASH
+    validate_header(original)
     old_ol2_source = (ROOT/'firmware/g9_oled.S').read_bytes()
     old_ol2_payload = (ROOT/'firmware/g9_oled.payload.hex').read_bytes()
     normalized, blocks, tail = decode_resource(original)
@@ -60,20 +62,25 @@ def main():
     for offset in range(0, len(padded), 32):
         payload = padded[offset:offset+32]
         framed.extend(payload + cms(payload).to_bytes(2, 'big'))
-    candidate = bytes(framed)
+    candidate = seal_header(framed)
+    header = validate_header(candidate)
+    header_changes = [i for i in range(16) if candidate[i] != original[i]]
+    assert set(header_changes) <= EDITABLE_HEADER_OFFSETS
+    resource_padding = (-len(framed)) % 4
     expected_offsets = {item['normalized_offset']+i for item in patches
                         for i, (a, b) in enumerate(zip(bytes.fromhex(item['old_hex']), bytes.fromhex(item['new_hex']))) if a != b}
     decoded, candidate_blocks, candidate_tail = decode_resource(candidate)
-    assert decoded == bytes(patched)+padded and not candidate_tail
-    actual_offsets = {i for i, (a, b) in enumerate(zip(normalized, decoded)) if a != b}
+    expected_image = bytearray(patched)+padded
+    expected_image[:16] = candidate[:16]
+    assert decoded == bytes(expected_image) and candidate_tail == bytes([255])*resource_padding
+    actual_offsets = {i for i, (a, b) in enumerate(zip(normalized, decoded)) if i >= 16 and a != b}
     assert actual_offsets == expected_offsets
     expected_blocks = sorted({(offset-16)//32 for offset in expected_offsets})
     assert expected_blocks == changed_blocks and len(changed_blocks) == 5
     for index, block in enumerate(blocks):
         assert (candidate_blocks[index] == block) == (index not in changed_blocks)
-    assert candidate[:16] == original[:16]
     assert len(padded)//32 == layout['extension_crc_blocks']
-    assert len(candidate) == layout['minimum_resource_size']
+    assert len(candidate) == layout['minimum_resource_size']+resource_padding
     assert len(candidate) <= ROUNDED_SIZE
     assert (len(candidate)+4095)&~4095 == (len(original)+4095)&~4095 == ROUNDED_SIZE
 
@@ -95,7 +102,9 @@ def main():
         source_resource_sha256=sha(original), candidate_resource_sha256=sha(candidate),
         source_resource_size=len(original), candidate_resource_size=len(candidate),
         source_original_crc_blocks=len(blocks), candidate_valid_crc_blocks=len(candidate_blocks),
-        header_16_bytes_unchanged=True, only_changed_original_crc_blocks=changed_blocks,
+        header_16_bytes_unchanged=False, header_changed_offsets=header_changes,
+        header_crc32_length=header, header_other_10_bytes_preserved=True,
+        container_ff_word_padding_bytes=resource_padding, only_changed_original_crc_blocks=changed_blocks,
         unchanged_original_blocks_preserved_byte_for_byte=True,
         original_data_changed_offsets=sorted(actual_offsets), patches=patches,
         append=dict(address=APPEND, normalized_offset=APPEND-BASE, resource_offset=16+3939*34,

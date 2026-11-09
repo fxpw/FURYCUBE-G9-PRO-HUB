@@ -7,15 +7,16 @@ installation remains blocked by the [recovery requirement](RECOVERY.md).
 
 ## Hardware identity comes first
 
-The G9 PRO manufacturer's product material names **BK3533**, while the SDK
-examined here is for **BK3633**. Similar firmware organization and peripheral
-code do not identify a physical chip or its security configuration. The
-normalized G9 application has no explicit printable ASCII `BK3633` or `BK3533`
-identifier. These BK3633 findings therefore remain conditional until the exact
-chip/board revision is established. See [hardware identity](HARDWARE-IDENTITY.md).
+The user's replacement target photographs now identify **BK3633QN48** and board
+**EPC-V18U0002**, printed `2025-4-3`. The preceding reference photos belonged to
+another mouse and are excluded. This supersedes the earlier uncertainty caused
+by the manufacturer's BK3533 marketing name. The normal application's missing
+chip string remains a limit of USB/software identification, but is no longer a
+reason to ignore the actual top marking. See [hardware identity](HARDWARE-IDENTITY.md).
 
-Do not use a BK3633 package pin number, boot command, flash capacity or security
-assumption as a verified G9 PRO fact.
+Board-level download/reset routing, boot entry, read access and installed security
+are still unverified. The correct QN48 package documentation is not a schematic
+of this mouse; its pin numbers are not automatically accessible board-pad names.
 
 ## A concrete reader exists, but is not yet an approved G9 reader
 
@@ -107,10 +108,9 @@ currently be treated as a harmless recovery probe.
 
 ## Next prerequisite decisions
 
-1. **Identify the hardware.** Obtain the actual chip/package and board revision,
-   plus manufacturer documentation or verified board photographs identifying
-   download/reset access and electrical requirements. No G9 pad assignment has
-   been established; none is prescribed here.
+1. **Map the identified hardware.** The replacement photos identify BK3633QN48 /
+   EPC-V18U0002. Obtain matching download/reset routing and electrical evidence.
+   No G9 pad assignment has been established; none is prescribed here.
 2. **Establish app-independent entry and its security limits.** Confirm the
    applicable ROM/loader handshake and whether it remains available when the
    app is invalid. Determine read-access policy without changing NVM/eFuse or
@@ -123,7 +123,9 @@ currently be treated as a harmless recovery probe.
    size, ranges, encrypted/plain format and CRC/address transforms. Include all
    accessible flash and record separately which NVM/eFuse regions are excluded.
    Plan two independent reads with matching hashes. App-only reads are useful
-   evidence but do not meet the full-restoration requirement.
+   evidence but do not constitute a full dump. This describes the UART full-dump
+   route; independently reachable USB app-only rollback is another possible
+   route if all outside-app state is demonstrably preserved or restorable.
 5. **Prove restoration separately.** A matching spare or an exact-hardware
    manufacturer recovery procedure is needed to validate restoration without
    making the only working mouse the destructive test fixture. A stable dump

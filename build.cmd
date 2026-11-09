@@ -32,6 +32,8 @@ call tools\build-profile-library-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-macro-tests.cmd
 if errorlevel 1 exit /b 1
+call tools\build-macro-backup-tests.cmd
+if errorlevel 1 exit /b 1
 call tools\build-firmware-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-firmware-ol3-tests.cmd

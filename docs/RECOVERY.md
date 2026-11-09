@@ -17,9 +17,11 @@ routine writes the same logical flash base used by onboard macros. The
 read/erase/write analysis below adds a configuration-loss risk before an app
 update has even started.
 
-**Controller identity is unresolved.** FURYCUBE's product page names **BK3533**;
-the BK3633 SDK is a research lead, not proof of the installed chip or compatible
-programming commands. See [hardware identity](HARDWARE-IDENTITY.md).
+**The replacement target-unit photographs identify BK3633QN48**, on board
+`EPC-V18U0002`, printed `2025-4-3`. The user withdrew the earlier reference
+pictures as belonging to another mouse. This now qualifies BK3633 package
+research; it does not establish board pad routing, security state, reader
+compatibility or independent recovery. See [hardware identity](HARDWARE-IDENTITY.md).
 
 ## What is actually established
 
