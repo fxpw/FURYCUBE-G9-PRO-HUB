@@ -4,13 +4,21 @@ Updated: 2026-11-09. **No firmware has been installed by this project.**
 
 The user requires that the device can be restored completely. This is a hard
 requirement: firmware installation stays blocked until recovery independent of
-a working application is confirmed and the current device contents are backed
-up, or an equivalent manufacturer-supported recovery procedure is proven for
-this exact hardware. A request to accept the risk does not replace this gate.
+a working application is confirmed and every affected device region can be
+restored. A complete current dump is one route. An equivalent verified app-only
+rollback can suffice if its valid BIM/stack and all other required state are
+preserved or restorable on this exact hardware. It need not survive destruction
+of a BIM that the operation never touches. A request to accept the risk does
+not replace this gate.
 
 The GUI, input diagnosis, offline emulation, candidate preparation and source
 publication can continue while flashing remains blocked. Candidate files have
 `.exe.disabled` names and must not be launched as a recovery experiment.
+
+An offline [minimal-sector plan](MINIMAL-UPDATE-PLAN.md) now shows the exact
+smaller application-write scope for a future preserving implementation. It is
+not a transport or installer and does not change the OEM updater's broad erase
+range or its entry/finish side effects.
 
 **Do not enter the OEM USB loader as a harmless probe.** Its application entry
 routine writes the same logical flash base used by onboard macros. The

@@ -40,6 +40,11 @@ The historical local `protocol-wired-macro-before.txt` illustrates that limit: a
 
 ## Pure codec and honest archives
 
+The later [storage-preservation audit](MACRO-STORAGE-PRESERVATION.md) executes
+the original setter and confirms full 128-byte writes. Its temporary bank is
+the state before the last update, not a current raw backup. Logical slot
+readback cannot reconstruct the unexposed 20 bytes from that older copy.
+
 `src/G9MacroBackup.cs` has no transport or upload capability. `MacroReadbackCodec.Decode` requires the exact ID/length/selector/checksum above; `BuildReadRequest` only constructs the bounded query bytes and does not add them to the live device whitelist. `MacroSlotRecord` owns immutable copies of raw 111-byte frames and opaque 106-byte data.
 
 `MacroBackupArchive` saves validated slots as fixed relative raw/data files plus a hash-checked manifest. Missing slots remain explicit; duplicate slots or invalid checksums cannot silently replace records. An erased-looking all-FF record with stored FFFF does not pass its data checksum and is never fabricated as an empty macro. A partial archive remains useful evidence; a complete logical set means only that all 32 expected slots were supplied and validated.

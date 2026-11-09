@@ -223,6 +223,8 @@ commands. OLED transfer is wired-only. These commands do not install firmware.
 Current milestones: [PLAN.md](PLAN.md).
 Firmware preparation and recovery status: [docs/FIRMWARE.md](docs/FIRMWARE.md).
 Recovery requirements before any installation: [docs/RECOVERY.md](docs/RECOVERY.md).
+The [minimal-sector calculation](docs/MINIMAL-UPDATE-PLAN.md) reduces a proposed
+future update's scope; it is not an installer or a verified recovery method.
 Current readback research and the offline-only archive verifier:
 [docs/RECOVERY-NEXT-STEPS.md](docs/RECOVERY-NEXT-STEPS.md). It validates supplied
 captured pages; it cannot read the mouse or clear the firmware recovery gate.
