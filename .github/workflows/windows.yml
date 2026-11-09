@@ -25,5 +25,8 @@ jobs:
             bin/G9Device.exe
             Run-Hub.cmd
             README.md
+            PLAN.md
+            docs/
+            firmware/OLED-PROTOCOL.md
             LICENSE
           if-no-files-found: error

@@ -43,7 +43,7 @@ internal static class G9FirmwarePatch {
         }
         return crc;
     }
-    static byte[] ReadBinResource(string path) {
+    internal static byte[] ReadBinResource(string path, int expectedSize=ResourceSize) {
         // DATAFILE | IMAGE_RESOURCE maps resources without running the PE entrypoint or DllMain.
         IntPtr module = LoadLibraryEx(path, IntPtr.Zero, 0x22);
         if (module == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Cannot map updater resources as data");
@@ -51,7 +51,7 @@ internal static class G9FirmwarePatch {
             IntPtr resource = FindResourceEx(module, "BIN", new IntPtr(129), 2052);
             if (resource == IntPtr.Zero) throw new InvalidDataException("BIN/129/2052 resource not found");
             uint size = SizeofResource(module, resource);
-            Require(size == ResourceSize, "Unexpected firmware resource length");
+            Require(size == expectedSize, "Unexpected firmware resource length");
             IntPtr loaded = LoadResource(module, resource);
             IntPtr address = loaded == IntPtr.Zero ? IntPtr.Zero : LockResource(loaded);
             if (address == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Cannot read firmware resource");
@@ -80,7 +80,7 @@ internal static class G9FirmwarePatch {
         }
         return sections;
     }
-    static List<object> VerifyUnchangedSections(byte[] source, byte[] candidate) {
+    internal static List<object> VerifyUnchangedSections(byte[] source, byte[] candidate) {
         var before = ReadSections(source); var after = ReadSections(candidate);
         Require(before.Count == after.Count, "Resource update changed PE section count");
         var checkedSections = new List<object>(); bool resourceFound = false;
@@ -94,7 +94,7 @@ internal static class G9FirmwarePatch {
         }
         Require(resourceFound, "Resource section missing"); return checkedSections;
     }
-    static void ReplaceBinResource(string candidate, byte[] resource) {
+    internal static void ReplaceBinResource(string candidate, byte[] resource) {
         IntPtr update = BeginUpdateResource(candidate, false);
         if (update == IntPtr.Zero) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "Cannot begin resource update");
         bool completed = false;
@@ -174,13 +174,17 @@ internal sealed class G9Hub : Form {
     readonly Label status = new Label { AutoSize = false, Height = 55, Dock = DockStyle.Top, ForeColor = Color.DarkGoldenrod };
     readonly TextBox log = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 9) };
     readonly List<Button> actions = new List<Button>();
+    readonly object deviceGate = new object();
+    G9OledWorker oledWorker;
+    readonly G9ScreenEditor screenEditor;
+    volatile bool closing;
     string preparedDirectory;
     internal G9Hub(string path) {
         root = path; Text = "FURYCUBE G9 PRO HUB"; Width = 1120; Height = 760; MinimumSize = new Size(960,650); StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10); Padding = new Padding(16);
-        var description = new Label { Text = "Обычная «0» на шестой кнопке и подготовка исправления ожидания OLED.", Height = 35, Dock = DockStyle.Top };
+        var description = new Label { Text = "Проверка устройства и локальная подготовка исправлений прошивки.", Height = 35, Dock = DockStyle.Top };
         status.Text = "Исправление OLED в мышь не установлено. Программа готова.";
-        var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 85, AutoSize = false };
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 130, AutoSize = false };
         AddButton(buttons, "Проверить мышь", async delegate { await Execute("Читаю настройки мыши…", delegate {
             RunProtocol("inspect"); RunProtocol("profile"); return "Настройки прочитаны. Вывод «0» проверяется нажатием кнопки в поле ввода.";
         }); });
@@ -191,12 +195,29 @@ internal sealed class G9Hub : Form {
             preparedDirectory = G9FirmwarePatch.Prepare(root); Append("Артефакты: " + preparedDirectory);
             return "Патч подготовлен; в мышь не установлен. Физическая работа пока не проверена.";
         }); });
+        AddButton(buttons, "Подготовить OLED + кнопку", async delegate { await Execute("Готовлю прошивку OL2 и проверяю все CRC…", delegate {
+            preparedDirectory = G9FirmwareOledPatch.Prepare(root); Append("Артефакты OL2: " + preparedDirectory);
+            return "Кандидат OL2 подготовлен локально. Прошивка не установлена; восстановление и физическая проверка ещё нужны.";
+        }); });
         AddButton(buttons, "Открыть папку", delegate { Process.Start(new ProcessStartInfo { FileName = preparedDirectory ?? root, UseShellExecute = true }); });
+        AddButton(buttons, "Сохранить назначения", async delegate { await Execute("Сохраняю таблицу кнопок…", delegate {
+            RunProtocol("backup"); return "Копия назначений сохранена. Это копия таблицы кнопок, а не всей прошивки.";
+        }); });
+        AddButton(buttons, "Восстановить назначения…", async delegate {
+            using(var dialog=new OpenFileDialog { Filter="Резервная копия назначений|keymap-*.bin|Двоичный файл|*.bin",InitialDirectory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","backups") }) {
+                if(dialog.ShowDialog(this)!=DialogResult.OK)return;
+                string selected=dialog.FileName;
+                await Execute("Восстанавливаю таблицу кнопок…",delegate {RunProtocol("restore \""+selected+"\"");return "Назначения восстановлены и проверены чтением.";});
+            }
+        });
+        AddButton(buttons, "Данные мыши", delegate { Append(screenEditor.DescribeMouseTelemetry()); });
         var tabs = new TabControl { Dock = DockStyle.Fill };
-        var mouse = new TabPage("Мышь и исправление") { Padding=new Padding(8) };
+        var assignments = new TabPage("Назначения кнопок"); assignments.Controls.Add(new G9ButtonEditor(RunProtocol, Append));
+        var mouse = new TabPage("Устройство и прошивка") { Padding=new Padding(8) };
         mouse.Controls.Add(log); mouse.Controls.Add(buttons); mouse.Controls.Add(status); mouse.Controls.Add(description);
-        var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(new G9ScreenEditor(Append));
-        tabs.TabPages.Add(mouse); tabs.TabPages.Add(screen); tabs.SelectedIndex=1; Controls.Add(tabs);
+        screenEditor=new G9ScreenEditor(Append,SendFrame);
+        var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(screenEditor);
+        tabs.TabPages.Add(assignments); tabs.TabPages.Add(screen); tabs.TabPages.Add(mouse); tabs.SelectedIndex=0; Controls.Add(tabs);
         Append("USB-команды выполняются только кнопками проверки и назначения. Подготовка исправления полностью локальная.");
     }
     void AddButton(FlowLayoutPanel panel, string text, EventHandler click) {
@@ -205,7 +226,7 @@ internal sealed class G9Hub : Form {
     }
     void Append(string value) {
         if (IsDisposed) return;
-        if (InvokeRequired) { BeginInvoke(new Action<string>(Append), value); return; }
+        if (InvokeRequired) { try { BeginInvoke(new Action<string>(Append), value); } catch(InvalidOperationException) {} return; }
         log.AppendText(DateTime.Now.ToString("HH:mm:ss") + " " + value + Environment.NewLine);
     }
     async Task Execute(string working, Func<string> operation) {
@@ -214,23 +235,64 @@ internal sealed class G9Hub : Form {
         catch (Exception error) { status.Text = "Операция остановлена: " + error.Message; status.ForeColor = Color.DarkRed; Append(error.Message); }
         finally { foreach (var button in actions) button.Enabled = true; }
     }
-    void RunProtocol(string action) {
+    string RunProtocol(string action) {
+        lock (deviceGate) {
+            if(closing)throw new ObjectDisposedException("HUB");
+            return RunDeviceProcess(action);
+        }
+    }
+    Task<string> SendFrame(byte[] pixels) {
+        Furycube.G9.Oled.OledProtocol.ValidateFrame(pixels);
+        return Task.Run(delegate {
+            lock(deviceGate) {
+                if(closing)throw new ObjectDisposedException("HUB");
+                G9OledWorker current=oledWorker;
+                try {
+                    if(current==null) {
+                        current=new G9OledWorker(root,Append);
+                        System.Threading.Interlocked.Exchange(ref oledWorker,current);
+                        if(closing)throw new ObjectDisposedException("HUB");
+                    }
+                    current.Send(pixels);
+                    return "Четыре страницы переданы. Видимое изображение на экране нужно проверить отдельно.";
+                } catch {
+                    if(current!=null) {
+                        System.Threading.Interlocked.CompareExchange(ref oledWorker,null,current);
+                        current.Dispose();
+                    }
+                    throw;
+                }
+            }
+        });
+    }
+    protected override void Dispose(bool disposing) {
+        if(disposing) {
+            closing=true;
+            var current=System.Threading.Interlocked.Exchange(ref oledWorker,null);
+            if(current!=null)current.Dispose();
+        }
+        base.Dispose(disposing);
+    }
+    string RunDeviceProcess(string action) {
         string executable = Path.Combine(root, "bin", "G9Device.exe");
         if (!File.Exists(executable)) throw new FileNotFoundException("Не найдена утилита G9Device.exe", executable);
         var start = new ProcessStartInfo { FileName = executable, Arguments = action, WorkingDirectory = root, UseShellExecute = false,
             CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardOutput = true, RedirectStandardError = true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8 };
         using (var process = new Process { StartInfo = start }) {
-            process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) Append(e.Data); };
-            process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) Append(e.Data); };
+            var output = new StringBuilder(); var errors = new StringBuilder();
+            process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) { lock (output) output.AppendLine(e.Data); Append(e.Data); } };
+            process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) { lock (errors) errors.AppendLine(e.Data); Append(e.Data); } };
             process.Start(); process.BeginOutputReadLine(); process.BeginErrorReadLine();
             if (!process.WaitForExit(30000)) { process.Kill(); throw new TimeoutException("Мышь не ответила за 30 секунд; переподключи её перед повторной проверкой."); }
             process.WaitForExit();
-            if (process.ExitCode != 0) throw new InvalidOperationException("G9Protocol завершил операцию с ошибкой; подробности в журнале.");
+            if (process.ExitCode == 4) throw new InvalidOperationException("Штатная прошивка не поддерживает передачу кадров OL2. Команды изображения не отправлены; сначала нужен проверенный путь восстановления и установка совместимого расширения.");
+            if (process.ExitCode != 0) throw new InvalidOperationException(errors.Length > 0 ? errors.ToString().Trim() : "G9Device завершил операцию с ошибкой; подробности в журнале.");
+            return output.ToString();
         }
     }
     [STAThread] static int Main(string[] args) {
-        if (args.Length == 2 && args[0] == "--prepare") {
-            try { Console.WriteLine(G9FirmwarePatch.Prepare(args[1])); return 0; }
+        if (args.Length == 2 && (args[0] == "--prepare" || args[0] == "--prepare-oled")) {
+            try { Console.WriteLine(args[0] == "--prepare-oled" ? G9FirmwareOledPatch.Prepare(args[1]) : G9FirmwarePatch.Prepare(args[1])); return 0; }
             catch (Exception error) { Console.Error.WriteLine(error.ToString()); return 1; }
         }
         if (args.Length != 0) return 2;

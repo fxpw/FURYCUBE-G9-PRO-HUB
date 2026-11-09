@@ -44,6 +44,11 @@ namespace Furycube.G9.Screen {
         public void Fill(bool lit) {for(int i=0;i<Buffer.Length;i++)Buffer[i]=lit?(byte)255:(byte)0;ClearUnusedBits();}
         public void Invert() {for(int i=0;i<Buffer.Length;i++)Buffer[i]=(byte)~Buffer[i];ClearUnusedBits();}
         public MonoFrame Clone() {return new MonoFrame(Width,Height,Buffer);}
+        public void Blit(MonoFrame source,int x,int y) {
+            if(source==null)throw new ArgumentNullException("source");
+            int left=Math.Max(0,-x),top=Math.Max(0,-y),right=Math.Min(source.Width,Width-x),bottom=Math.Min(source.Height,Height-y);
+            for(int sy=top;sy<bottom;sy++)for(int sx=left;sx<right;sx++)SetPixel(x+sx,y+sy,source.GetPixel(sx,sy));
+        }
         public Bitmap ToBitmap(int scale) {
             if(scale<1||scale>32||(long)Width*Height*scale*scale>16777216)throw new ArgumentOutOfRangeException("scale");
             int w=Width*scale,h=Height*scale;var image=new Bitmap(w,h,PixelFormat.Format32bppArgb);
@@ -123,7 +128,7 @@ namespace Furycube.G9.Screen {
         }
     }
 
-    public enum WidgetKind {Text,Clock,Battery,Dpi,CpuPercent,RamPercent,GpuPercent,CpuTemperatureC,GpuTemperatureC}
+    public enum WidgetKind {Text,Clock,Battery,Dpi,CpuPercent,RamPercent,GpuPercent,CpuTemperatureC,GpuTemperatureC,DpiStage}
     public sealed class ScreenWidget {
         public string Id {get;set;}
         public WidgetKind Kind {get;set;}
@@ -149,6 +154,8 @@ namespace Furycube.G9.Screen {
         public DateTime Now {get;set;}
         public double? BatteryPercent {get;set;}
         public int? Dpi {get;set;}
+        // Profile stage selector (1..8), distinct from numeric sensitivity in DPI.
+        public int? DpiStage {get;set;}
         // Supplied by a future sensor adapter or explicit preview value; this
         // renderer never reads CPU counters or starts a sensor background task.
         public double? CpuPercent {get;set;}
@@ -174,6 +181,7 @@ namespace Furycube.G9.Screen {
                 case WidgetKind.Clock:return context.Now.ToString(String.IsNullOrEmpty(widget.Format)?"HH:mm":widget.Format,CultureInfo.GetCultureInfo(String.IsNullOrEmpty(context.CultureName)?"ru-RU":context.CultureName));
                 case WidgetKind.Battery:return (widget.ShowLabel?"BAT ":"")+Percent(context.BatteryPercent);
                 case WidgetKind.Dpi:return (widget.ShowLabel?"DPI ":"")+(context.Dpi.HasValue&&context.Dpi.Value>0?context.Dpi.Value.ToString(CultureInfo.InvariantCulture):"--");
+                case WidgetKind.DpiStage:return (widget.ShowLabel?"DPI# ":"")+(context.DpiStage.HasValue&&context.DpiStage.Value>=1&&context.DpiStage.Value<=8?context.DpiStage.Value.ToString(CultureInfo.InvariantCulture):"--");
                 case WidgetKind.CpuPercent:return (widget.ShowLabel?"CPU ":"")+Percent(context.CpuPercent);
                 case WidgetKind.RamPercent:return (widget.ShowLabel?"RAM ":"")+Percent(context.RamPercent);
                 case WidgetKind.GpuPercent:return (widget.ShowLabel?"GPU ":"")+Percent(context.GpuPercent);
@@ -212,7 +220,7 @@ namespace Furycube.G9.Screen {
             return new List<ScreenWidget> {
                 new ScreenWidget {Kind=WidgetKind.Clock,X=0,Y=0,Width=half,Height=top,FontSize=font,ShowLabel=false},
                 new ScreenWidget {Kind=WidgetKind.Battery,X=half,Y=0,Width=Math.Max(1,width-half),Height=top,FontSize=font},
-                new ScreenWidget {Kind=WidgetKind.Dpi,X=0,Y=top,Width=width,Height=Math.Max(1,height-top),FontSize=font,Bold=true}
+                new ScreenWidget {Kind=WidgetKind.DpiStage,X=0,Y=top,Width=width,Height=Math.Max(1,height-top),FontSize=font,Bold=true}
             };
         }
     }
@@ -226,6 +234,11 @@ namespace Furycube.G9.Screen {
         // Absolute paths may exist only while editing a new/imported project.
         // Save copies the source into portable assets and serializes a relative path.
         public string ImageFile {get;set;}
+        public int ImageX {get;set;}
+        public int ImageY {get;set;}
+        // Zero retains Version1 compatibility: use the full canvas dimension.
+        public int ImageWidth {get;set;}
+        public int ImageHeight {get;set;}
         public ImageOptions ImageOptions {get;set;}
         public CompositionMode Composition {get;set;}
         public List<ScreenWidget> Widgets {get;set;}
@@ -237,6 +250,8 @@ namespace Furycube.G9.Screen {
         public void Validate() {
             if(Version!=1)throw new InvalidDataException("Unsupported screen project version");MonoFrame.ValidateGeometry(Width,Height);
             if(ImageOptions==null||Widgets==null||Widgets.Count>128||!Enum.IsDefined(typeof(CompositionMode),Composition))throw new InvalidDataException("Invalid screen project settings");
+            if(ImageX < -4096||ImageX>4096||ImageY < -4096||ImageY>4096||ImageWidth<0||ImageHeight<0)throw new InvalidDataException("Invalid image layer geometry");
+            MonoFrame.ValidateGeometry(ImageWidth==0?Width:ImageWidth,ImageHeight==0?Height:ImageHeight);
             ImageOptions.Validate();foreach(ScreenWidget widget in Widgets){if(widget==null)throw new InvalidDataException("Null widget");widget.Validate();}
             CultureInfo.GetCultureInfo(String.IsNullOrEmpty(CultureName)?"ru-RU":CultureName);
         }
@@ -283,11 +298,14 @@ namespace Furycube.G9.Screen {
         public MonoFrame Render(WidgetContext context) {
             Validate();var frame=new MonoFrame(Width,Height);frame.Fill(ImageOptions.BackgroundLit);
             if(Composition!=CompositionMode.Widgets&&!String.IsNullOrEmpty(ImageFile)) {
-                using(var image=new Bitmap(ResolveImagePath()))frame=ImageConverter.Convert(image,Width,Height,ImageOptions);
+                using(var image=new Bitmap(ResolveImagePath())) {
+                    MonoFrame layer=ImageConverter.Convert(image,ImageWidth==0?Width:ImageWidth,ImageHeight==0?Height:ImageHeight,ImageOptions);
+                    frame.Blit(layer,ImageX,ImageY);
+                }
             }
             if(Composition!=CompositionMode.Image) {
                 context=context??new WidgetContext();
-                var configured=new WidgetContext {Now=context.Now,BatteryPercent=context.BatteryPercent,Dpi=context.Dpi,
+                var configured=new WidgetContext {Now=context.Now,BatteryPercent=context.BatteryPercent,Dpi=context.Dpi,DpiStage=context.DpiStage,
                     CpuPercent=context.CpuPercent,RamPercent=context.RamPercent,GpuPercent=context.GpuPercent,
                     CpuTemperatureC=context.CpuTemperatureC,GpuTemperatureC=context.GpuTemperatureC,CultureName=CultureName};
                 frame=WidgetRenderer.Render(frame,Widgets,configured);

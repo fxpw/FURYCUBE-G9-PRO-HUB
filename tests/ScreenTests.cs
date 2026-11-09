@@ -62,10 +62,17 @@ internal static class ScreenTests {
         }
     }
     static void Widgets() {
-        var context=new WidgetContext {Now=new DateTime(2026,11,9,13,7,0),BatteryPercent=72,Dpi=1600,CpuPercent=42.4,RamPercent=63.3,GpuPercent=25,CpuTemperatureC=56.2,GpuTemperatureC=60.7};
+        var context=new WidgetContext {Now=new DateTime(2026,11,9,13,7,0),BatteryPercent=72,Dpi=1600,DpiStage=3,CpuPercent=42.4,RamPercent=63.3,GpuPercent=25,CpuTemperatureC=56.2,GpuTemperatureC=60.7};
         Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.Clock},context)=="13:07","clock uses supplied time");
         Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.Battery},context)=="BAT 72%","battery uses supplied value");
         Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.Dpi},context)=="DPI 1600","DPI value");
+        Check((int)WidgetKind.Dpi==3&&(int)WidgetKind.GpuTemperatureC==8&&(int)WidgetKind.DpiStage==9,"new DPI stage preserves existing JSON enum values");
+        Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.DpiStage},context)=="DPI# 3","DPI stage is labeled as a stage, not numeric sensitivity");
+        Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.DpiStage,ShowLabel=false},context)=="3","DPI stage label can be hidden");
+        Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.Dpi},new WidgetContext {DpiStage=3})=="DPI --","stage is never substituted for unavailable numeric DPI");
+        foreach(int invalidStage in new[]{0,9})Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.DpiStage},new WidgetContext {DpiStage=invalidStage})=="DPI# --","out-of-range DPI stages remain unknown");
+        Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.DpiStage},new WidgetContext())=="DPI# --","missing DPI stage remains unknown");
+        Check(WidgetRenderer.CreateDefault(120,28)[2].Kind==WidgetKind.DpiStage,"default layout uses the available passive stage value");
         Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.CpuPercent},context)=="CPU 42%","CPU preview value without sensors");
         Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.CpuPercent},new WidgetContext())=="CPU --%","unknown CPU is not fabricated");
         Check(WidgetRenderer.GetText(new ScreenWidget {Kind=WidgetKind.RamPercent},context)=="RAM 63%","RAM preview value");
@@ -86,16 +93,33 @@ internal static class ScreenTests {
         var project=new ScreenProject {ImageFile=external,Composition=CompositionMode.Image,Width=6,Height=2};project.Save(first);
         string json=File.ReadAllText(first);Check(!json.Contains(directory)&&!json.Contains("DirectoryPath")&&!Path.IsPathRooted(project.ImageFile),"serialized project contains no absolute source paths");
         Check(project.ImageFile.StartsWith("assets/"),"image imported into portable asset directory");
+        string originalDirectory=project.DirectoryPath,originalImage=project.ImageFile;
+        var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
+        var snapshot=serializer.Deserialize<ScreenProject>(serializer.Serialize(project));snapshot.ImageFile=project.ResolveImagePath();
+        string autosave=Path.Combine(directory,"autosave","autosave.g9screen.json");snapshot.Save(autosave);
+        Check(project.DirectoryPath==originalDirectory&&project.ImageFile==originalImage,"autosave snapshot preserves the active project folder and relative image path");
         var loaded=ScreenProject.Load(first);Check(loaded.Width==6&&loaded.Height==2&&loaded.ImageOptions.Threshold==128,"project settings round trip");
         string second=Path.Combine(directory,"second","screen.json");loaded.Save(second);
         File.Delete(external);Directory.Delete(Path.GetDirectoryName(first),true);
         var moved=ScreenProject.Load(second);using(var preview=moved.Render(new WidgetContext()).ToBitmap())Check(preview.GetPixel(0,0).ToArgb()==Color.White.ToArgb(),"save-as project renders after original sources are removed");
+        Check(Lit(ScreenProject.Load(autosave).Render(new WidgetContext()))==12,"autosave snapshot carries its own image after original sources are removed");
         string hostile=Path.Combine(directory,"hostile.json");File.WriteAllText(hostile,"{\"Version\":1,\"Width\":120,\"Height\":28,\"ImageFile\":\"../private.png\",\"Composition\":0,\"ImageOptions\":{},\"Widgets\":[]}");
         bool rejected=false;try {ScreenProject.Load(hostile);}catch(InvalidDataException){rejected=true;}Check(rejected,"project cannot escape its asset directory");
     }
+    static void PositionedImage(string directory) {
+        string file=Path.Combine(directory,"layer.png");using(var bitmap=Solid(2,2,Color.White))bitmap.Save(file,ImageFormat.Png);
+        var project=new ScreenProject {Width=4,Height=3,ImageFile=file,ImageX=2,ImageY=1,ImageWidth=2,ImageHeight=2,Composition=CompositionMode.Image};
+        MonoFrame frame=project.Render(new WidgetContext());Check(Lit(frame)==4,"positioned image preserves its own rectangle size");
+        for(int y=0;y<3;y++)for(int x=0;x<4;x++)Check(frame.GetPixel(x,y)==(x>=2&&y>=1),"image is blitted at its independent offset");
+        project.ImageX=3;project.ImageY=2;frame=project.Render(new WidgetContext());Check(Lit(frame)==1&&frame.GetPixel(3,2),"overhanging image is clipped without shrinking");
+        Check(project.ImageWidth==2&&project.ImageHeight==2,"moving image does not change image dimensions");
+        project.ImageX=0;project.ImageY=0;project.ImageWidth=0;project.ImageHeight=0;project.ImageOptions.Resize=ResizeMode.Stretch;Check(Lit(project.Render(new WidgetContext()))==12,"legacy zero image dimensions use the canvas size");
+        var canvas=new MonoFrame(3,3);var source=new MonoFrame(2,2);source.Fill(true);canvas.Blit(source,-1,-1);Check(Lit(canvas)==1&&canvas.GetPixel(0,0),"negative blit clips at the top-left boundary");
+        canvas.Blit(source,8,8);Check(Lit(canvas)==1,"entirely outside blit has no effect");
+    }
     static int Main() {
         string directory=Path.Combine(Path.GetTempPath(),"G9ScreenTests-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
-        try {Packing();Preview();Conversion();Resize();Widgets();PortableProject(directory);Console.WriteLine("PASS "+assertions+" screen checks: pixel packing,28-row padding, preview, threshold/dither, fit/crop, widgets, portable projects");return 0;}
+        try {Packing();Preview();Conversion();Resize();Widgets();PortableProject(directory);PositionedImage(directory);Console.WriteLine("PASS "+assertions+" screen checks: pixel packing,28-row padding, preview, threshold/dither, fit/crop, widgets, portable projects and positioned image clipping");return 0;}
         catch(Exception e){Console.Error.WriteLine("FAIL "+e);return 1;}
         finally {if(Directory.Exists(directory))Directory.Delete(directory,true);}
     }

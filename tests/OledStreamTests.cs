@@ -1,0 +1,87 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Furycube.G9.Oled;
+
+internal static class OledStreamTests {
+    sealed class FakeTransport : IOledTransport {
+        internal int Reads, Attempts, FailAt;
+        internal ushort Pid = 0x2148;
+        internal byte[] Version = new byte[] { 11, 5, 1, 1, 8, (byte)'O', (byte)'L', (byte)'2' };
+        internal readonly List<byte[]> Writes = new List<byte[]>();
+        public ushort VendorId { get { return 0x1D57; } }
+        public ushort ProductId { get { return Pid; } }
+        public byte[] ReadFirmwareVersion() { Reads++; return Version; }
+        public void SendFeature(byte[] report) {
+            Attempts++;
+            if (FailAt == Attempts) throw new IOException("Simulated disconnected original handle");
+            Writes.Add((byte[])report.Clone());
+        }
+    }
+    sealed class TrackedReader : StringReader {
+        internal int Consumed;
+        internal TrackedReader(string value) : base(value) { }
+        public override int Read() { int value = base.Read(); if (value >= 0) Consumed++; return value; }
+    }
+    static int checks;
+    static void Check(bool value, string name) { if (!value) throw new Exception("FAIL " + name); checks++; }
+    static string Frame(byte first, byte last) {
+        byte[] pixels = new byte[480]; pixels[0] = first; pixels[479] = last;
+        return "FRAME " + Convert.ToBase64String(pixels);
+    }
+    static void Reject(string command, string name) {
+        var fake = new FakeTransport(); var output = new StringWriter();
+        string input = command + "\n" + Frame(2, 0) + "\n";
+        var reader = new TrackedReader(input);
+        try { OledStreaming.Run(reader, output, fake, delegate(int value) { }); }
+        catch (InvalidDataException) {
+            Check(fake.Reads == 1 && fake.Writes.Count == 0, name + " rejected before any SET");
+            Check(output.ToString().Trim() == "OLED_STREAM_READY", name + " has no false frame ACK");
+            Check(reader.Consumed <= command.Length + 1, name + " leaves later frame unread");
+            return;
+        }
+        throw new Exception("FAIL accepted " + name);
+    }
+    static int Main() { try {
+        var transport = new FakeTransport(); var output = new StringWriter(); var delays = new List<int>();
+        int result = OledStreaming.Run(new StringReader(Frame(0x81, 0xF) + "\r\n" + Frame(0x42, 1) + "\nSTOP\n" + Frame(3, 0)),
+            output, transport, delegate(int value) { delays.Add(value); });
+        Check(result == 0 && transport.Reads == 1 && transport.Writes.Count == 8, "same transport and one discovery for two complete frames");
+        Check(output.ToString().Replace("\r\n", "\n") == "OLED_STREAM_READY\nOLED_FRAME_SENT 1\nOLED_FRAME_SENT 2\n", "strict ready and frame ACK protocol");
+        Check(delays.Count == 6 && delays.TrueForAll(delegate(int value) { return value == 25; }), "25ms pacing between four pages for each frame");
+        for (int i = 0; i < 8; i++) {
+            OledPage page = OledProtocol.DecodeWritePage(transport.Writes[i], i % 4);
+            Check(page.InitializeDisplay == (i == 0), "INIT only once in complete stream, report " + i);
+        }
+        Check(transport.Writes[0][10] == 0x81 && transport.Writes[4][10] == 0x42 && transport.Writes[3][129] == 0xF, "both frame contents preserved including visible last-page bits");
+        Reject("FRAME !!!", "short/invalid Base64");
+        string malformed = Frame(1, 0);
+        Reject(malformed.Substring(0, 6) + "!" + malformed.Substring(7), "non-Base64 character");
+        Reject(Frame(1, 0) + " ", "trailing whitespace");
+        Reject("FRAME " + Convert.ToBase64String(new byte[479]), "wrong decoded byte count/padding");
+        Reject(Frame(1, 0x10), "invisible last-page pixels");
+        Reject("UNKNOWN", "unknown command");
+        Reject("", "empty line");
+        Reject(new string('X', 1025), "bounded oversized line");
+        var stopTransport = new FakeTransport(); var stopReader = new TrackedReader("STOP\n" + Frame(1, 0));
+        OledStreaming.Run(stopReader, new StringWriter(), stopTransport, delegate(int value) { });
+        Check(stopTransport.Writes.Count == 0 && stopReader.Consumed == 5, "STOP consumes no following input");
+        var eofTransport = new FakeTransport();
+        OledStreaming.Run(new StringReader(Frame(1, 0)), new StringWriter(), eofTransport, delegate(int value) { });
+        Check(eofTransport.Writes.Count == 4, "EOF after complete final line accepted");
+        var broken = new FakeTransport { FailAt = 5 }; var failureOutput = new StringWriter();
+        string one = Frame(1, 0) + "\n", two = Frame(2, 0) + "\n";
+        var failureInput = new TrackedReader(one + two + Frame(3, 0));
+        try { OledStreaming.Run(failureInput, failureOutput, broken, delegate(int value) { }); throw new Exception("FAIL missing disconnect"); }
+        catch (IOException) { checks++; }
+        Check(broken.Reads == 1 && broken.Attempts == 5 && broken.Writes.Count == 4, "disconnect stops immediately without reconnect/discovery/retry");
+        Check(failureInput.Consumed == one.Length + two.Length, "disconnect leaves later frame unread");
+        Check(failureOutput.ToString().Replace("\r\n", "\n") == "OLED_STREAM_READY\nOLED_FRAME_SENT 1\n", "failed second frame is not acknowledged");
+        var stock = new FakeTransport { Version = new byte[] { 11, 5, 1, 1, 8, 0, 0, 0 } }; var stockOutput = new StringWriter();
+        try { OledStreaming.Run(new StringReader(Frame(1, 0)), stockOutput, stock, delegate(int value) { }); throw new Exception("FAIL accepted stock"); }
+        catch (InvalidDataException) { checks++; }
+        Check(stock.Writes.Count == 0 && stockOutput.ToString() == "", "stock discovery has no READY or SET22");
+        Console.WriteLine("PASS " + checks + " fake OLED stream checks; no USB, no physical display claim");
+        return 0;
+    } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }
+}

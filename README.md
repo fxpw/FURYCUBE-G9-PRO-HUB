@@ -1,38 +1,18 @@
 # FURYCUBE G9 PRO HUB
 
-Независимый HUB для мыши **FURYCUBE G9 PRO**: редактор маленького OLED-экрана,
-полезные виджеты, собственный HID-клиент и воспроизводимое исследование ошибки
-шестой кнопки. Windows x64, C#/.NET Framework, без установки драйвера перехвата.
+An independent Windows application for the **FURYCUBE G9 PRO** mouse: onboard
+button assignments, an OLED layout editor, images, and useful widgets.
+Written in C# using Windows HID and the built-in .NET Framework.
 
-**Проект экспериментальный и не связан с производителем.** Предпросмотр на ПК
-уже работает. Загрузка своего изображения на физический экран ещё находится
-в разработке; подготовленный патч кнопки пока проверен только в эмуляторе.
-HUB не выполняет автоматическую перепрошивку.
+**Experimental, unofficial project.** The desktop editor and configuration
+client work; the firmware changes have passed offline checks but have **not
+been installed or validated on the development mouse**. The application does
+not flash firmware automatically.
 
-## Что работает сейчас
+## Get started
 
-| Возможность | Состояние |
-|---|---|
-| Чтение назначений и активного профиля | Проверено на G9 PRO по USB, `1D57:2148` |
-| Назначение обычной «0» шестой кнопке | Запись и повторное чтение проверены; для самостоятельного нажатия нужен firmware fix ниже |
-| Независимый HID-клиент | Windows HID/SetupAPI, без DLL установленного FURYCUBE HUB |
-| Импорт PNG/JPEG/BMP/GIF/TIFF | Вписать, обрезать или растянуть; порог, дизеринг и инверсия |
-| Монохромный экран | Предпросмотр **120×28**, буфер 480 байт, экспорт PNG и 1bpp |
-| Виджеты | Текст, часы, заряд, DPI, CPU/GPU, ОЗУ, температуры |
-| Данные датчиков | CPU/ОЗУ через Windows; NVIDIA GPU через уже установленный NVML; температура CPU из доступного локального источника |
-| Проекты экрана | JSON и переносимые изображения в `assets/` |
-| Патч ожидания OLED | Два байта инструкции и CRC; офлайн-проверки пройдены, на мышь не установлен |
-| Передача кадров на OLED | **Разрабатывается.** В интерфейсе отключена до проверки firmware API |
-
-Заряд и DPI в виджете остаются неизвестными до подключения соответствующего
-источника данных; программа не подставляет вымышленные значения. Недоступная
-температура отображается прочерком. У GIF сейчас используется отдельный кадр,
-анимация не реализована.
-
-## Быстрый запуск
-
-Нужна Windows 10/11 x64 со штатным .NET Framework 4.x. Для обычной сборки не нужны
-Visual Studio, Python, установщик старого HUB или отдельный драйвер.
+Windows 10/11 x64 with .NET Framework 4.x. No Visual Studio, Python, vendor HUB,
+or additional input driver is required for the normal application build.
 
 ```powershell
 git clone https://github.com/fxpw/FURYCUBE-G9-PRO-HUB.git
@@ -41,159 +21,113 @@ cd FURYCUBE-G9-PRO-HUB
 .\Run-Hub.cmd
 ```
 
-Сборка создаёт `bin/FURYCUBE-G9-PRO-HUB.exe` и `bin/G9Device.exe`, затем запускает
-проверки протокола, графики и датчиков. На текущем этапе — **834 проверки**.
-Обычный запуск не отправляет команды в мышь. Чтение или запись выполняются
-кнопками на вкладке «Мышь и исправление».
+The build creates `bin/FURYCUBE-G9-PRO-HUB.exe` and `bin/G9Device.exe`, then runs
+offline checks. GitHub Actions also builds the application on Windows.
+The current interface is in Russian; this README is in English.
 
-### Редактор экрана
+The manufacturer's software is optional:
+[official G9 PRO downloads](https://www.furycube.com/pages/g9-pro).
+Close the old HUB before changing settings: it can overwrite the mouse with
+its own saved profile.
 
-1. Выберите пресет: часы/заряд/DPI, CPU/GPU/ОЗУ, температуры, текст или картинка.
-2. Для картинки настройте обрезку, порог и дизеринг.
-3. Виджеты можно добавлять, удалять и располагать по координатам, менять размер
-   и подписи. Размер экрана маленький: обычно помещаются две строки.
-4. Сохраните проект. Изображение копируется рядом с ним, поэтому проект можно
-   перенести на другой ПК.
-5. PNG и двоичный кадр можно экспортировать. Кнопка «На OLED» пока недоступна:
-   она не должна изображать успешную запись в неподдерживающую её прошивку.
+## Button assignments
 
-Статическое назначение кнопки должно работать без запущенного HUB. Живые виджеты
-с данными ПК требуют обновлений из работающего HUB. Сохранение своей картинки
-после выключения питания или сна мыши ещё не подтверждено.
+The first tab, **Назначения кнопок** (Button assignments), contains the original
+HUB's assignment categories: mouse clicks and scrolling, DPI, keyboard keys
+and modifiers, onboard macro slots, media controls, browser actions,
+application shortcuts, and profile actions.
 
-## Почему шестая кнопка не печатает «0»
+1. Click **Прочитать из мыши** to read the current button table.
+2. Select a physical button or wheel direction.
+3. Choose a category, action, and any parameters.
+4. Click **Записать в мышь** to save and read the result back.
 
-Шестая кнопка G9 PRO — нажимаемая площадка с OLED. В исследованной прошивке её
-удержание управляет экраном. Когда она нажата отдельно, прошивка сначала
-вооружает OLED-жест и откладывает обработку обычного нажатия. При отпускании
-клавиатурная последовательность может отмениться до отправки самой клавиши.
+Only the selected assignment changes. Each write creates a button-table backup
+under `%LOCALAPPDATA%\FURYCUBE-G9-PRO\backups`. At least one main physical button
+must retain left click. The current client edits profile 1. Reserved slots are
+hidden by default because their physical meaning is unconfirmed.
 
-Диагноз проверен сравнением одинакового назначения `11 00 27`:
+Assignments reside in the mouse and do not require the HUB to stay open.
+Selecting a macro assigns an **existing onboard slot**; creating and uploading
+macro sequences is a separate, unfinished feature. A candidate firmware fix
+removes the OLED button's hold-gesture delay; physical validation is still pending.
 
-| Физический тест | Результат |
+## OLED editor
+
+![OLED layout editor with layers, widgets, and positioning controls](docs/images/editor.png)
+
+The **Экран и виджеты** tab provides:
+
+- PNG/JPEG/BMP/GIF/TIFF import, fit/crop/stretch, threshold, dithering, and invert.
+- Text, clock, mouse battery/DPI level, CPU/GPU load, RAM, and temperature widgets.
+- Independent X/Y, width, height, and font-size sliders; drag layers in the preview.
+- Image positioning and resizing, including clipping outside the canvas.
+- Presets, labels, checkboxes, portable JSON projects with image assets, autosave,
+  and PNG/packed-frame export.
+
+The canvas is **120 × 28 monochrome pixels**. CPU and RAM use Windows APIs.
+NVIDIA metrics use NVML from an existing driver installation. CPU temperature
+can use an already running local sensor source; no sensor driver is installed.
+Battery and DPI-level widgets listen to passive mouse input reports. Missing or
+expired values show a dash. `DPI#` is the level number (1–8), **not** numeric DPI;
+the separate numeric-DPI widget remains unavailable until its source is verified.
+After disconnecting the telemetry source, restart the HUB to connect it again.
+GIF import currently uses one frame.
+
+**Physical OLED upload requires the experimental OL2 firmware extension.**
+Stock firmware does not advertise it. The host checks capabilities before writing
+a frame. Physical orientation, sleep, and persistence remain unverified; the stock
+renderer may overwrite a custom image. Live PC widgets require the HUB to keep
+running and sending updates. Enable **Обновлять OLED каждую секунду** for live
+updates; the helper reuses one verified connection and initializes only the first
+frame. An error stops updates without automatic retries. Live updates are off
+after every application launch. A desktop preview does not prove OLED support.
+
+## Development and verification
+
+`build.cmd` runs packet, assignment, rendering, project-portability, sensor,
+OLED-protocol, and firmware-builder checks. Tests use captured fixtures and fake
+transports; these are kept separate from real-device results. Firmware integration
+checks requiring a proprietary local input are explicitly skipped when that
+input is absent, including in public CI.
+
+| Source | Purpose |
 |---|---|
-| Обычная «0» на нажатии колёсика | Печатает «0» |
-| Обычная «0» на кнопке-экране отдельно | Не печатает |
-| Кнопка-экран при зажатой правой кнопке | Печатает «0» |
+| `src/G9Hub.cs` | Application window and local firmware preparation |
+| `src/G9ButtonEditor.cs`, `src/G9Bindings.cs` | Assignment UI and original-HUB action catalog |
+| `src/G9Device.cs` | Independent HID client, validation, backups, and readback |
+| `src/G9Screen.cs`, `src/G9ScreenEditor.cs` | Rendering, image layers, widgets, and projects |
+| `src/G9Sensors.cs` | Optional system metrics without installing drivers |
+| `src/G9Telemetry.cs`, `src/G9TelemetryReader.cs` | Passive mouse battery and DPI-level input |
+| `src/G9Oled.cs` | OL2 capability checks and frame encoding |
+| `src/G9FirmwareOledPatch.cs`, `firmware/g9_oled.S` | Offline firmware builder and own ARM extension |
 
-Таким образом, клавиатурный USB-тракт работает, а проблема связана с обработкой
-экранной кнопки. Проверки включали настоящий ввод в текстовое поле и события
-Raw Input от конкретной мыши. Наблюдение USB completion подтвердило передачу
-клавиатурных отчётов, но **байты USB-пакетов через ETW на этой Windows получены
-не были** — это не выдаётся за побайтовый захват.
-
-Оригинальные инструкции обработчиков исполнены в Unicorn. Они воспроизводят
-ошибку для отдельной экранной кнопки и нормальную работу колёсика/сочетания
-с правой. ROM-вызовы и оборудование в этой модели заменены заглушками,
-готовность endpoint предполагается; это не заменяет физическую проверку.
-
-### Минимальный кандидат исправления
-
-Для одного конкретного официального образа 1.08 подготовлена замена инструкции,
-которая включает ожидание OLED-удержания:
-
-```text
-ARM Thumb VA:       0x3201C
-Инструкция:        0D 70 -> C0 46
-BIN resource:      0xA212
-CRC16/CMS блока:   53 AA -> 34 33, смещение 0xA216
-```
-
-Изменяются два байта кода и два байта проверочного слова. Размер образа и
-остальные данные сохраняются. **Общая задержка кнопок не увеличивается.**
-
-Долгое удержание площадки после такого исправления больше не должно
-переключать OLED; обычные отрисовка, сон и включение экрана этим патчем не
-заменяются. DPI-клик и клавиатурные сценарии прошли офлайн-проверки при включённом
-и выключенном OLED. Физическая установка кандидата ещё не проводилась.
-
-## Подготовка прошивки
-
-Исходные программы и прошивки производителя **не включены в репозиторий**.
-Скачивать их нужно с [официальной страницы G9 PRO](https://www.furycube.com/pages/g9-pro).
-Поддерживаемый вход: архив `G9_PRO_BT_Ver1.08_Upgrade_20251028.rar`, официальный
-`Update.exe` из него размещается в `evidence/firmware-readonly/<папка>/Update.exe`.
-
-Ожидаемый SHA256 обновлятора:
-
-```text
-558031de581d5ba2317abd367c793776def812f4ec7eff6cff86850658748be4
-```
-
-HUB кнопкой «Подготовить исправление»:
-
-- проверяет исходные SHA256, инструкцию и CRC;
-- создаёт отдельную копию с изменённым BIN-ресурсом;
-- сверяет итоговый ресурс и неизменность остальных PE-секций;
-- пишет `patch-report.json` и пояснение рядом с результатом;
-- оставляет кандидату расширение `.exe.disabled` и **не запускает его**.
-
-Отдельная Python-проверка дополнительно сверяет все **3939** блоков CRC16/CMS
-и точные четыре байта diff. Она находится в `tools/verify_firmware_candidate.py`.
-
-**Почему нет кнопки автоматической установки:** штатный обновлятор не создаёт
-копию установленной прошивки, недостаточно проверяет аппаратную ревизию и
-стирает более широкую область, чем записывает. Совпадения PID и номера 1.08
-недостаточно для гарантии совместимости. До проверки текущего образа и способа
-восстановления проект не считает перепрошивку безопасным автоматическим шагом.
-
-Подробности OLED и предлагаемого протокола: [firmware/OLED-PROTOCOL.md](firmware/OLED-PROTOCOL.md).
-Состояние этапов: [PLAN.md](PLAN.md).
-
-## Виджеты и источники данных
-
-- **Часы и текст:** без внешних программ.
-- **CPU и ОЗУ:** штатные Win32-счётчики; первый замер CPU может быть неизвестным,
-  пока не накопилась разность счётчиков.
-- **NVIDIA GPU:** NVML из установленного драйвера, без скачивания DLL.
-- **Температура CPU:** необязательное чтение уже работающего локального источника.
-  Текущий адаптер поддерживает локальный температурный источник Seelen; он не
-  устанавливает его и не меняет выбранный датчик. Метка вроде `Core (Tctl/Tdie)`
-  сохраняется и не подменяется `CPU Die (average)`.
-- **Недоступные данные:** прочерк, без подстановки ACPI-температуры вместо CPU.
-
-Пути и токены локальных источников не записываются в проекты экрана.
-
-## Устройство проекта
-
-| Файл | Назначение |
-|---|---|
-| `src/G9Hub.cs` | Окно HUB и подготовка точного firmware-кандидата |
-| `src/G9Device.cs` | Независимый HID-клиент, проверки пакетов, backup/restore |
-| `src/G9Screen.cs` | Монохромные кадры, импорт, виджеты и переносимые проекты |
-| `src/G9ScreenEditor.cs` | Редактор и предпросмотр OLED |
-| `src/G9Sensors.cs` | Системные показатели без установки драйверов |
-| `src/G9ZeroProbe.cs` | Временная пассивная проверка клавиатурного ввода |
-| `src/G9UsbTrace.cs` | Дополнительная отладка USB через встроенный ETW |
-| `tools/emulate_screen_key.py` | Воспроизведение ошибки и кандидата исправления |
-| `tools/emulate_oled_protocol.py` | Офлайн-прототип графического протокола |
-
-Обычные команды клиента:
+Useful configuration commands:
 
 ```powershell
-.\bin\G9Device.exe inspect
-.\bin\G9Device.exe profile
+.\bin\G9Device.exe caps
+.\bin\G9Device.exe mapping
+.\bin\G9Device.exe firmware
 .\bin\G9Device.exe backup
-.\bin\G9Device.exe zero
 ```
 
-При наличии кабеля выбирается `2148`; `--pid fa60` задаёт приёмник явно.
-Перед записью создаётся резервная копия таблицы кнопок в
-`%LOCALAPPDATA%\FURYCUBE-G9-PRO\backups`. Затем выполняется повторное чтение.
-Эти команды не являются установкой firmware-патча. Старый фирменный HUB
-может перезаписать настройки своим сохранённым профилем.
+The wired device (`VID 1D57 / PID 2148`) is preferred when connected.
+Use `--pid fa60` to select the 2.4 GHz receiver for supported configuration
+commands. OLED transfer is wired-only. These commands do not install firmware.
 
-Для исследовательских эмуляторов нужны Python, `pefile`, `capstone`, `unicorn`
-и самостоятельно полученный официальный образ. Обычная сборка редактора
-не использует эти пакеты. Старые C++/диагностические инструменты оставлены как
-материалы исследования и не нужны для запуска нового HUB.
+Current milestones: [PLAN.md](PLAN.md).
+Firmware preparation and recovery status: [docs/FIRMWARE.md](docs/FIRMWARE.md).
+Recovery requirements before any installation: [docs/RECOVERY.md](docs/RECOVERY.md).
+Mouse telemetry sources: [docs/TELEMETRY.md](docs/TELEMETRY.md).
+OLED wire format and ARM extension: [firmware/OLED-PROTOCOL.md](firmware/OLED-PROTOCOL.md).
+Research emulators require Python, Capstone, Unicorn, and a separately obtained
+official firmware image; they are not required to run the HUB.
 
-## Лицензия и происхождение
+## License and attribution
 
-Собственный код проекта — [MIT](LICENSE). Торговая марка, фирменные бинарники и
-прошивка принадлежат их правообладателям и не распространяются вместе с кодом.
-Проект не является официальным обновлением FURYCUBE.
+Own source code is licensed under [MIT](LICENSE). FURYCUBE trademarks, vendor
+executables, and complete vendor firmware images belong to their respective
+owners and are not distributed in this repository.
 
-При исследовании использовались статический анализ, Capstone, Unicorn и
-[REA](https://github.com/morluto/rea). Отчёты и исходники отделяют наблюдения
-реального устройства от предположений и эмуляции.
+Research used static analysis, Capstone, Unicorn, and
+[REA](https://github.com/morluto/rea). This project is not an official FURYCUBE update.

@@ -6,13 +6,17 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Web.Script.Serialization;
 using Microsoft.Win32.SafeHandles;
+using Furycube.G9.Bindings;
+using Furycube.G9.Oled;
 
 // Pure packet checks are shared by the executable and offline fixture tests.
 internal static class G9Wire {
     internal const int KeymapLength = 59;
     internal static byte[] ReadKeysRequest() { return new byte[] { 0xA0, 8, 59, 0, 1, 0, 0, 0 }; }
     internal static byte[] ReadProfileRequest() { return new byte[] { 0xA0, 12, 8, 0, 1, 0, 0, 0 }; }
+    internal static byte[] ReadFirmwareRequest() { return new byte[] { 0xA0, 11, 8, 0, 1, 0, 0, 0 }; }
     internal static byte[] SelectProfileOne() { return new byte[] { 12, 10, 1, 0xFE, 1, 0xFE, 0, 0, 0, 0 }; }
     static void Require(bool value, string message) { if (!value) throw new InvalidDataException(message); }
     internal static void ValidateAck(byte[] data, bool ready) {
@@ -43,8 +47,13 @@ internal static class G9Wire {
     internal static void ValidateSend(byte[] data) {
         Require(data != null, "Packet missing");
         if (data.Length == 59 && data[0] == 8) { DecodeKeys(data); return; }
-        if (Equal(data, ReadKeysRequest()) || Equal(data, ReadProfileRequest()) || Equal(data, SelectProfileOne())) return;
+        if (Equal(data, ReadKeysRequest()) || Equal(data, ReadProfileRequest()) || Equal(data, ReadFirmwareRequest()) || Equal(data, SelectProfileOne())) return;
         throw new InvalidDataException("Command is not permitted by the G9 configuration transport");
+    }
+    internal static byte[] DecodeFirmware(byte[] data) {
+        Require(data != null && data.Length == 8 && data[0] == 11 && (data[1] == 5 || data[1] == 8) && data[2] == 1,
+            "Unexpected firmware-version report, length or selector");
+        return (byte[])data.Clone();
     }
     internal static bool Equal(byte[] a, byte[] b) {
         if (a == null || b == null || a.Length != b.Length) return false;
@@ -129,9 +138,12 @@ internal static class G9Hid {
     }
 }
 
-internal sealed class G9Connection : IDisposable {
+internal sealed class G9Connection : IDisposable, IOledDeviceSession {
     readonly SafeFileHandle handle;
+    bool oledAuthorized;
     internal readonly G9Hid.Candidate Device;
+    public ushort VendorId { get { return 0x1D57; } }
+    public ushort ProductId { get { return Device.Product; } }
     internal G9Connection(ushort requestedPid) {
         List<G9Hid.Candidate> all = G9Hid.Enumerate(); ushort wanted = requestedPid;
         if (wanted == 0) { wanted = 0xFA60; foreach (var item in all) if (item.Product == 0x2148) wanted = 0x2148; }
@@ -163,18 +175,57 @@ internal sealed class G9Connection : IDisposable {
     }
     internal byte[] ReadKeys() { return G9Wire.DecodeKeys(Read(G9Wire.ReadKeysRequest(), 8, Device.Product == 0x2148 ? 59 : 64)); }
     internal byte[] ReadProfile() { return G9Wire.DecodeProfile(Read(G9Wire.ReadProfileRequest(), 12, 8)); }
+    internal byte[] ReadFirmware() { return G9Wire.DecodeFirmware(Read(G9Wire.ReadFirmwareRequest(), 11, 8)); }
+    void EnsureWiredOledIdentity() {
+        if (Device.Product != 0x2148 || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes < OledProtocol.FeatureBytes)
+            throw new OledFirmwareUnsupportedException("OLED uploads require the same open wired G9 1D57:2148 configuration interface.");
+        var attributes = new G9Hid.Attributes { Size = (uint)Marshal.SizeOf(typeof(G9Hid.Attributes)) };
+        if (!G9Hid.HidD_GetAttributes(handle, ref attributes) || attributes.Vendor != 0x1D57 || attributes.Product != 0x2148) {
+            oledAuthorized = false; throw new OledFirmwareUnsupportedException("The opened device identity changed; OLED writes are disabled.");
+        }
+    }
+    public byte[] ReadOledFirmware() {
+        oledAuthorized = false; EnsureWiredOledIdentity();
+        byte[] reply = ReadFirmware();
+        try { OledProtocol.DecodeFirmwareCapabilities(reply); }
+        catch (InvalidDataException error) { throw new OledFirmwareUnsupportedException(error.Message); }
+        oledAuthorized = true; return reply;
+    }
+    public void SendOledFeature(byte[] report) {
+        if (!oledAuthorized) throw new InvalidOperationException("This device handle has not advertised supported OL2 firmware");
+        EnsureWiredOledIdentity(); OledProtocol.DecodeWritePage(report);
+        if (!G9Hid.HidD_SetFeature(handle, report, report.Length)) {
+            oledAuthorized = false; throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED SetFeature failed; remaining pages were not sent");
+        }
+        Console.WriteLine("OLED_SEND len={0} page={1} flags={2}", report.Length, report[7], report[9]);
+    }
     internal void WriteKeys(byte[] expected) {
+        oledAuthorized = false;
         expected = G9Wire.DecodeKeys(expected);
+        BindingCatalog.EnsureLeftClick(expected);
         Console.WriteLine("SELECTING PROFILE=1 MACRO PROFILE=1");
         Send(G9Wire.SelectProfileOne()); Thread.Sleep(500);
         Send(expected); Thread.Sleep(500);
         byte[] actual = ReadKeys();
         if (!G9Wire.Equal(actual, expected)) throw new InvalidDataException("Readback differs from requested settings; physical output is not verified");
     }
-    public void Dispose() { handle.Dispose(); }
+    public void Dispose() { oledAuthorized = false; handle.Dispose(); }
 }
 
 internal static class G9DeviceProgram {
+    static byte HexByte(string text) {
+        if (text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) text = text.Substring(2);
+        byte value; if (!byte.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value)) throw new ArgumentException("Invalid hexadecimal binding byte"); return value;
+    }
+    static void PrintMapping(byte[] keymap) {
+        var rows = new List<object>();
+        foreach (var button in BindingCatalog.Buttons) {
+            int offset = 3 + button.Index * 3; BindingAction action = BindingCatalog.Resolve(keymap[offset], keymap[offset + 1], keymap[offset + 2]);
+            rows.Add(new { index = button.Index, name = button.Name, physicalLabel = button.PhysicalLabel, visible = button.IsVisible,
+                function = (int)keymap[offset], param1 = (int)keymap[offset + 1], param2 = (int)keymap[offset + 2], bindingId = action == null ? null : action.Id });
+        }
+        Console.WriteLine("MAPPING_JSON " + new JavaScriptSerializer().Serialize(new { profile = 1, keymapHex = G9Wire.Hex(keymap), buttons = rows }));
+    }
     static string SaveBackup(byte[] keys, ushort pid, string directory) {
         keys = G9Wire.DecodeKeys(keys); Directory.CreateDirectory(directory);
         string name = "keymap-" + DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfffffff'Z'") + "-" + pid.ToString("x4") + "-" + Guid.NewGuid().ToString("N") + ".bin";
@@ -185,23 +236,35 @@ internal static class G9DeviceProgram {
     static int Main(string[] args) {
         Console.OutputEncoding = new UTF8Encoding(false);
         try {
-            if (args.Length == 0) { Console.WriteLine("G9Device inspect | profile | zero | backup | restore <backup.bin> | caps [--pid 2148|fa60] [--backup-dir path]"); return 2; }
+            if (args.Length == 0) { Console.WriteLine("G9Device inspect | mapping | profile | firmware | zero | backup | restore <backup.bin> | assign --index N --function HEX --param1 HEX --param2 HEX | oled-caps | oled-frame --file <480-byte-frame.bin> | oled-stream | caps [--pid 2148|fa60] [--backup-dir path]"); return 2; }
             string command = args[0];
-            if (command != "inspect" && command != "profile" && command != "zero" && command != "backup" && command != "restore" && command != "caps") throw new ArgumentException("Unknown command");
+            if (command != "inspect" && command != "mapping" && command != "profile" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "oled-caps" && command != "oled-frame" && command != "oled-stream" && command != "caps") throw new ArgumentException("Unknown command");
             ushort pid = 0; string restore = null;
+            string frameFile = null; byte[] oledFrame = null;
+            int? assignmentIndex = null; byte? function = null; byte param1 = 0, param2 = 0;
             string backupDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FURYCUBE-G9-PRO", "backups");
             for (int i = 1; i < args.Length; i++) {
                 if (args[i] == "--pid" && i + 1 < args.Length) {
                     if (!ushort.TryParse(args[++i], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out pid) || (pid != 0x2148 && pid != 0xFA60)) throw new ArgumentException("Unsupported PID");
                 } else if (args[i] == "--backup-dir" && i + 1 < args.Length) backupDirectory = Path.GetFullPath(args[++i]);
+                else if (command == "assign" && args[i] == "--index" && i + 1 < args.Length) { int parsed; if (!int.TryParse(args[++i], out parsed) || parsed < 0 || parsed >= 18) throw new ArgumentException("Button index must be 0..17"); assignmentIndex = parsed; }
+                else if (command == "assign" && args[i] == "--function" && i + 1 < args.Length) function = HexByte(args[++i]);
+                else if (command == "assign" && args[i] == "--param1" && i + 1 < args.Length) param1 = HexByte(args[++i]);
+                else if (command == "assign" && args[i] == "--param2" && i + 1 < args.Length) param2 = HexByte(args[++i]);
+                else if (command == "oled-frame" && args[i] == "--file" && i + 1 < args.Length && frameFile == null) frameFile = Path.GetFullPath(args[++i]);
                 else if (command == "restore" && restore == null) restore = Path.GetFullPath(args[i]);
                 else throw new ArgumentException("Unexpected command argument");
             }
             byte[] restored = null;
+            if (command == "oled-frame") {
+                if (frameFile == null || new FileInfo(frameFile).Length != OledProtocol.BufferBytes) throw new InvalidDataException("OLED upload requires --file pointing to a 480-byte packed frame");
+                oledFrame = File.ReadAllBytes(frameFile); OledProtocol.ValidateFrame(oledFrame);
+            }
+            if (command == "assign") { if (!assignmentIndex.HasValue || !function.HasValue) throw new ArgumentException("Assign requires --index and --function"); BindingCatalog.Validate(function.Value, param1, param2); }
             if (command == "restore") {
                 if (restore == null) throw new ArgumentException("Restore requires a 59-byte keymap backup");
                 byte[] bytes = File.ReadAllBytes(restore);
-                if (bytes.Length != 59) throw new InvalidDataException("Backup must contain exactly 59 bytes"); restored = G9Wire.DecodeKeys(bytes);
+                if (bytes.Length != 59) throw new InvalidDataException("Backup must contain exactly 59 bytes"); restored = G9Wire.DecodeKeys(bytes); BindingCatalog.EnsureLeftClick(restored);
             }
             if (command == "caps") {
                 foreach (var candidate in G9Hid.Enumerate()) if (pid == 0 || candidate.Product == pid)
@@ -209,14 +272,31 @@ internal static class G9DeviceProgram {
                 Console.WriteLine("CAPS ONLY: no feature reports requested or settings written."); return 0;
             }
             using (var device = new G9Connection(pid)) {
+                if (command == "oled-stream") return OledStreaming.Run(Console.In, Console.Out, new NativeOledTransport(device));
+                if (command == "oled-caps" || command == "oled-frame") {
+                    var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();
+                    Console.WriteLine("OLED_CAPS_JSON " + new JavaScriptSerializer().Serialize(new { supported = true, extension = capabilities.Extension, width = capabilities.Width,
+                        height = capabilities.VisibleHeight, bufferBytes = capabilities.BufferBytes, physicalVerified = false }));
+                    if (command == "oled-frame") {
+                        OledTransferResult result = uploader.WriteFrame(oledFrame);
+                        Console.WriteLine("OLED_REPORTS_SENT={0} DISPLAY_VERIFIED=false", result.FeatureReportsSent);
+                    }
+                    return 0;
+                }
                 if (command == "profile") { byte[] profile = device.ReadProfile(); Console.WriteLine("ACTIVE PROFILE={0} MACRO PROFILE={1}", profile[0], profile[1]); return 0; }
+                if (command == "firmware") { Console.WriteLine("FIRMWARE_RESPONSE " + G9Wire.Hex(device.ReadFirmware())); return 0; }
                 byte[] current = device.ReadKeys(); Console.WriteLine("BUTTON6 function={0:x2} modifier={1:x2} usage={2:x2}", current[12], current[13], current[14]);
                 if (command == "inspect") { Console.WriteLine("KEYMAP VALIDATED. A physical keypress is a separate check."); return 0; }
+                if (command == "mapping") { PrintMapping(current); return 0; }
+                byte[] expected = command == "assign" ? BindingCatalog.WithAssignment(current, assignmentIndex.Value, function.Value, param1, param2) :
+                    command == "zero" ? BindingCatalog.WithAssignment(current, 3, 0x11, 0, 0x27) : restored;
                 SaveBackup(current, device.Device.Product, backupDirectory);
                 if (command == "backup") return 0;
-                device.WriteKeys(command == "zero" ? G9Wire.WithZero(current) : restored);
+                device.WriteKeys(expected);
                 Console.WriteLine("CONFIG VERIFIED. Tool is exiting. Test the sixth button in a text field."); return 0;
             }
-        } catch (Exception error) { Console.Error.WriteLine("ERROR: " + error.Message); return 1; }
+        } catch (OledFirmwareUnsupportedException error) { Console.WriteLine("OLED_UNSUPPORTED " + error.Message); return 4; }
+        catch (NotSupportedException error) { Console.WriteLine("OLED_UNSUPPORTED " + error.Message); return 4; }
+        catch (Exception error) { Console.Error.WriteLine("ERROR: " + error.Message); return 1; }
     }
 }

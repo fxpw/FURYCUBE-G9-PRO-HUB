@@ -35,6 +35,12 @@ internal static class DeviceProtocolTests {
         Reject(delegate { G9Wire.DecodeProfile(Change(active, 0, 8)); }, "profile report ID");
         Pass(G9Wire.Equal(G9Wire.ReadKeysRequest(), Hex("a0083b0001000000")), "captured read-keymap request");
         Pass(G9Wire.Equal(G9Wire.ReadProfileRequest(), Hex("a00c080001000000")), "captured read-profile request");
+        Pass(G9Wire.Equal(G9Wire.ReadFirmwareRequest(), Hex("a00b080001000000")), "version query uses full declared eight-byte report");
+        G9Wire.ValidateSend(G9Wire.ReadFirmwareRequest()); count++;
+        Pass(G9Wire.Equal(G9Wire.DecodeFirmware(Hex("0b08010108000000")), Hex("0b08010108000000")), "stock version read remains available without OLED marker");
+        G9Wire.DecodeFirmware(Hex("0b050101084f4c32")); count++;
+        Reject(delegate { G9Wire.DecodeFirmware(Hex("0b08020108000000")); }, "wrong version selector");
+        Reject(delegate { G9Wire.ValidateSend(Hex("2200000000000000")); }, "OLED feature report excluded from generic transport");
         G9Wire.ValidateSend(zero); count++; G9Wire.ValidateSend(G9Wire.SelectProfileOne()); count++;
         Reject(delegate { G9Wire.ValidateSend(Hex("1008000000000000")); }, "firmware-update entry command");
         Reject(delegate { G9Wire.ValidateSend(Change(zero, 58, 0)); }, "bad keymap write");
