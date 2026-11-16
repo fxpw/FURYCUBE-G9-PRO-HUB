@@ -1,8 +1,11 @@
 # DG3: RF state on the mouse display
 
-Updated 2026-11-17. **Installed, but USB mouse input failed its physical check.**
+Updated 2026-11-17. **Installed; USB input recovered and passed 9/9 without a
+PC reboot.** The native display visibly showed the expected 9000 baseline.
 DG3 is a temporary observation tool, not a radio OLED fix or a custom image
-uploader. Restoring movement and clicks now takes priority over radio telemetry.
+uploader. A fresh radio input check also passed 9/9; the version query timed out
+and the owner reported 9000 after moving and stopping the mouse. This remains
+ambiguous: an idle value does not establish whether the request was received.
 
 The updater completed 33/33 blocks and closed normally. A complete USB settings
 read passed; restoring only the reset screen-button assignment and independently
@@ -13,16 +16,18 @@ after a mouse-interface restart returned success. A subsequent composite-device
 restart returned 3010, requesting a Windows reboot; no PC reboot was issued.
 PnP status OK did not establish recovery. One independently verified, scoped
 USB hub-port cycle returned success and Windows recorded a new G9 arrival,
-but the owner still reported no recovery. No PC reboot or global filter change
-was issued. Radio telemetry and the visible diagnostic number remain unqualified.
+but the owner still reported no recovery. No PC reboot was issued during those
+attempts.
 
-The installed Interception mouse filter is present in G9's reported driver
+The installed Interception mouse filter was present in G9's reported driver
 stack. Its pinned binary rejects CONNECT indices of 10 or higher, while this
 boot's registry lists `PointerClass0` through `PointerClass15`. The exact current
 G9 class index has not been established; a driver registry key ending in `0015`
-is not that proof. A temporary, automatically restored class-registration bypass
-has been prepared and reviewed without applying it. It requires separate owner
-approval because the registration is global, despite cycling only the G9 port.
+is not that proof. The owner then explicitly approved a temporary class-
+registration bypass while cycling only the G9 port. It removed Interception
+from the G9 stack; the original registration was restored and independently
+verified. Input subsequently passed 9/9 with the same firmware and settings,
+and the owner confirmed recovery. See [the evidence and limits](WINDOWS-INPUT-RECOVERY.md).
 No filter mask or event was changed; the installed driver's unsupported
 GET_FILTER IOCTL was deliberately not used.
 
@@ -117,9 +122,9 @@ remains `[0x2B000,0x51000)`. Manufacturer binaries and generated
 packages stay private. A full installed-firmware dump and independent recovery
 remain unverified.
 
-The next physical step is recovery of USB movement and clicks without a PC
-reboot, followed by automatically collected input evidence. Only after input
-passes should one radio query be compared with the visible diagnostic number.
+The radio sample was 9000. DG4 is prepared offline to also expose the last
+accepted report ID through idle; it has not been installed. See
+[DG4 diagnostic](DG4-RADIO-DIAGNOSTIC.md).
 The normal HUB radio OLED guard stays enabled. Offline EP2 tests supply their
 completion callback; they do not prove that the physical endpoint or Windows
 delivered it during this failure.

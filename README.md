@@ -25,7 +25,8 @@ identified development mouse, not every device sold under the same name.
 | OL6 carrier experiment | Earlier installation introduced a separate experimental client. The owner confirmed radio input but reported missing USB mouse input. It was superseded by OL7 before any image upload. |
 | OL7 USB input guard | Earlier installed build. A single USB image and continued input were confirmed after Windows restart; the radio input check passed 9/9. Ordinary radio reads later timed out before an image could be sent. |
 | DG2 diagnostic control | Earlier installed without custom OLED support to compare the original radio path. Complete USB settings matched all 117 saved bytes; both USB and radio input passed 9/9. Radio version queries still timed out, including through the OEM library. See [DG1/DG2 controls](docs/DG1-DG2-CONTROLS.md). |
-| DG3 RF state display | Installed as a temporary stock-font diagnostic. All 117 profile bytes match, but the USB check collected only the screen key; the owner reported missing movement/clicks. Input recovery is in progress; radio telemetry has not been physically qualified. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
+| DG3 RF state display | Installed as a temporary stock-font diagnostic. USB input recovered without a PC reboot after an approved Interception bypass and passed 9/9; the visible USB baseline is 9000. Radio input also passed 9/9, but the version query still timed out. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
+| DG4 last-request diagnostic | Prepared and checked offline, not installed. Adds the last accepted report ID to the native diagnostic number so an idle sample is more informative. See [DG4 diagnostic](docs/DG4-RADIO-DIAGNOSTIC.md). |
 | OL8 / OL9 candidates | Separate context-kind and checksum hypotheses have passed complete offline checks and exact updater packaging. Neither is installed. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
 | PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
@@ -44,8 +45,11 @@ implemented, while ordinary receiver OLED remains disabled pending end-to-end
 qualification. One OL7 USB image is now physically confirmed; its radio image
 could not be tested because discovery timed out. DG2, a control image without
 custom OLED, also reproduced the ordinary configuration timeout. DG3 is now
-installed for diagnostics and exposed another USB mouse-input failure. Input
-recovery takes priority. The brief screen change reported
+installed for diagnostics; its USB input failure was recovered by bypassing
+Interception in the G9 stack, with the original global registration restored.
+The same firmware then passed the input check without a PC reboot.
+See [Windows input recovery](docs/WINDOWS-INPUT-RECOVERY.md).
+The brief screen change reported
 at startup has not been identified as host traffic or a firmware redraw.
 See [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
 The [OEM receiver framing audit](docs/OEM-RECEIVER-FRAMING.md) documents the
@@ -71,8 +75,8 @@ the missing items. Timestamped JSON reports and event logs are saved under
 `%LOCALAPPDATA%\FURYCUBE-G9-PRO\input-checks`; use `--output <new-report.json>`
 to choose a new location. This checks input only, not the OLED image or a full
 hardware/firmware qualification. OL7 receiver checks and the earlier DG2 USB
-and radio checks passed 9/9. The subsequent DG3 USB check collected only 1/9;
-it must not be counted as a pass.
+and radio checks passed 9/9. DG3 initially collected only 1/9; after the approved
+Interception bypass, separate USB and radio checks passed 9/9.
 
 ## Build and run
 
