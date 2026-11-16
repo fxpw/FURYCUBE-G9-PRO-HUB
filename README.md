@@ -24,8 +24,8 @@ identified development mouse, not every device sold under the same name.
 | OL5 OLED and retained last frame | Installed on the development mouse; USB image and continued input were confirmed. The radio image did not appear and later configuration reads timed out, so receiver OLED is disabled in the native client and UI. Unplugging only USB with the switch already at 2.4 GHz loses the image. |
 | OL6 carrier experiment | Earlier installation introduced a separate experimental client. The owner confirmed radio input but reported missing USB mouse input. It was superseded by OL7 before any image upload. |
 | OL7 USB input guard | Earlier installed build. A single USB image and continued input were confirmed after Windows restart; the radio input check passed 9/9. Ordinary radio reads later timed out before an image could be sent. |
-| DG2 diagnostic control | Temporarily installed without custom OLED support to compare the original radio path. Complete USB settings match all 117 saved bytes; both USB and radio input passed 9/9. The first radio version request still timed out. See [DG1/DG2 controls](docs/DG1-DG2-CONTROLS.md). |
-| DG3 RF state display | Prepared and checked offline; not installed yet. A temporary stock-font diagnostic displays the sampled radio state while preserving real DPI and input logic. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
+| DG2 diagnostic control | Earlier installed without custom OLED support to compare the original radio path. Complete USB settings matched all 117 saved bytes; both USB and radio input passed 9/9. Radio version queries still timed out, including through the OEM library. See [DG1/DG2 controls](docs/DG1-DG2-CONTROLS.md). |
+| DG3 RF state display | Installed as a temporary stock-font diagnostic. All 117 profile bytes match, but the USB check collected only the screen key; the owner reported missing movement/clicks. Input recovery is in progress; radio telemetry has not been physically qualified. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
 | OL8 / OL9 candidates | Separate context-kind and checksum hypotheses have passed complete offline checks and exact updater packaging. Neither is installed. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
 | PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
@@ -42,8 +42,10 @@ The next hardware milestone is an ordinary working radio configuration read,
 then a visible control image. The PC-side frame cache and reconnect path are
 implemented, while ordinary receiver OLED remains disabled pending end-to-end
 qualification. One OL7 USB image is now physically confirmed; its radio image
-could not be tested because discovery timed out. DG2 is now a temporary control
-image without custom OLED; it is not the final HUB firmware. The brief screen change reported
+could not be tested because discovery timed out. DG2, a control image without
+custom OLED, also reproduced the ordinary configuration timeout. DG3 is now
+installed for diagnostics and exposed another USB mouse-input failure. Input
+recovery takes priority. The brief screen change reported
 at startup has not been identified as host traffic or a firmware redraw.
 See [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
 The [OEM receiver framing audit](docs/OEM-RECEIVER-FRAMING.md) documents the
@@ -68,8 +70,9 @@ Closing early or reaching the ten-minute limit saves an incomplete result with
 the missing items. Timestamped JSON reports and event logs are saved under
 `%LOCALAPPDATA%\FURYCUBE-G9-PRO\input-checks`; use `--output <new-report.json>`
 to choose a new location. This checks input only, not the OLED image or a full
-hardware/firmware qualification. OL7 receiver checks and the current DG2 USB
-and radio checks passed 9/9.
+hardware/firmware qualification. OL7 receiver checks and the earlier DG2 USB
+and radio checks passed 9/9. The subsequent DG3 USB check collected only 1/9;
+it must not be counted as a pass.
 
 ## Build and run
 
