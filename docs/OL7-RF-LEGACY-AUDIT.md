@@ -91,6 +91,13 @@ Movement, all five mouse buttons, both scroll directions and the assigned
 screen-key make/break passed. This proves input works despite the configuration
 timeout; it does not prove OLED delivery or a sensor response.
 
+A further owner-confirmed off/on and receiver reconnect preceded one guarded
+frame attempt. Its very first GET0B/selector1 discovery timed out, so **zero**
+carrier packets were sent. The nine-step radio input check passed again after
+that failure. A later single A0-only observation still returned not-ready; it
+sent no prepare and consumed no payload. Not-ready does not establish FSM idle
+or identify which side of the link stalled.
+
 Before another feature request, establish recovery again. The separately guarded
 frame command only needs fresh version/profile discovery, and the complete USB
 backup already exists; it does not require repeating the failing GET04. One
@@ -103,6 +110,45 @@ GET0C with the existing bounded wait and stop-on-timeout policy. Prove the
 legacy channel works before OLED/new firmware. Do not drain an ungranted
 payload, resend the timed-out prepare or loosen the production RF guard.
 There is no evidence that OL8/OL9 repairs this existing timeout.
+
+## Reproducible current-record selector audit
+
+`tools/audit_rf_get_selector.py` executes 28 paired stock/OL7 cases using pinned
+cached objects and valid synthetic flash records. It does not compile, access a
+device or change cached artifacts. The real RF dispatcher, main-loop worker,
+getter, active-profile loader, fragmentation and TX-completion instructions run;
+RF hardware/interrupt delivery and periodic scheduling gates remain supplied
+inputs. Evidence is written only under ignored `evidence/rf-selector-audit/`.
+
+```sh
+tools/pyenv/bin/python tools/audit_rf_get_selector.py
+```
+
+Selector0 enters RF state12 directly. Selector1 enters state11 first, then runs
+`0x30032`. GET0B/0C selector1 queues no preload; GET04 selector1 queues task22
+and preloads the requested saved profile. Under the modeled enabled scheduler,
+GET0B/0C took one iteration with selector0 and two with selector1; GET04
+selector1 took three. These iteration counts are not physical timing bounds.
+
+| Version read | Stock raw 8-byte reply | OL7 raw 8-byte reply |
+| --- | --- | --- |
+| Selector0, current record | `0b08010800000000` | `0b0801084f4c3700` |
+| Selector1, selected record | `0b08010108000000` | `0b080101084f4c37` |
+
+The header layouts differ; treating selector0 bytes as the ordinary selector1
+reply would decode the wrong fields. A separately prepared read-only probe
+accepts only the exact current-record OL7/1.08 response; it is not yet physically
+qualified and has not changed the production discovery or OLED guard.
+
+Selector0 does **not** eliminate all profile work. After copying every tested
+reply, common completion `0x33C9A..0x33CA6` calls the active-profile loader
+`0x30B78` before setting state13. With valid records this reads 117 flash bytes
+and rewrites runtime configuration without reaching an NVM writer. All normal
+cases finished with identical configuration RAM. A valid-checksum sensor-RAM
+drift case demonstrated that selector0 publishes current RAM then reloads saved
+values, while selector1 preloads saved values before publishing. It is therefore
+not a general substitute for selected-profile settings reads. None of these
+results establishes why physical discovery failed or proves selector0 fixes it.
 
 See [radio settings](RADIO-SETTINGS.md) and [read handshake](READ-HANDSHAKE.md)
 for the receiver's 64-byte payload transfer and the limits of the A0 ready bit.
