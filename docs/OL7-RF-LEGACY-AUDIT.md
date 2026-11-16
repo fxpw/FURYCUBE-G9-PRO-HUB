@@ -73,6 +73,30 @@ the complete installed image remain untested.
 
 ## Next diagnostic, when hardware work resumes
 
+### Subsequent physical checkpoint
+
+After a fresh USB connection, one OL7 USB image and continued input were
+confirmed, with the full 117-byte profile matching the saved baseline. The owner
+then disconnected USB, switched the mouse off/on, replugged the receiver and
+established normal radio input. A standalone GET0C succeeded. In the next
+settings-read, GET0C succeeded again but the following GET04 sensor/DPI request
+remained A0-idle until its deadline. No payload GET04 or OLED frame was sent.
+This narrows the observed failure: profile reads can now complete, while sensor
+readback still fails. It does not identify whether mouse preparation, multi-part
+RF response delivery or receiver reassembly stalled.
+
+The new passive `G9InputCheck.exe` then completed all nine receiver-only checks,
+closed automatically and wrote a successful JSON report plus an event log.
+Movement, all five mouse buttons, both scroll directions and the assigned
+screen-key make/break passed. This proves input works despite the configuration
+timeout; it does not prove OLED delivery or a sensor response.
+
+Before another feature request, establish recovery again. The separately guarded
+frame command only needs fresh version/profile discovery, and the complete USB
+backup already exists; it does not require repeating the failing GET04. One
+frame after a fresh reset remains an experiment, with visible-panel/input checks
+required and the production radio OLED guard unchanged.
+
 Establish completed recovery/reset first; 3010 plus PnP OK is insufficient.
 Keep OL7, establish fresh radio input/wake, then attempt one serialized normal
 GET0C with the existing bounded wait and stop-on-timeout policy. Prove the

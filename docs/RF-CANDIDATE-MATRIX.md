@@ -7,7 +7,7 @@ qualified. None of these updates is installed through the radio receiver.
 
 | Variant | Purpose | Carrier | Status |
 | --- | --- | --- | --- |
-| OL7 | Baseline with USB settings/input readiness guard |56-byte SET04, kind0, stage0, custom CRC/tag6 | Installed; owner confirms USB input after Windows restart. Current radio configuration read timed out before any image. |
+| OL7 | Baseline with USB settings/input readiness guard |56-byte SET04, kind0, stage0, custom CRC/tag6 | Installed; USB image/input confirmed. After physical reconnect GET0C works, but the subsequent sensor GET04 timed out. Passive radio input passed 9/9; no radio image submitted. |
 | OL8 | Test whether the receiver supplies context kind1 | Same carrier; allow kind0/1 and reject2/255 | Full offline checks and bounded updater ready; not installed. |
 | OL9 | Test a receiver that verifies the native sensor checksum |56-byte SET04 with OEM checksum50..51 plus custom CRC52..53/tag9 | Full offline checks and bounded updater ready; not installed. |
 

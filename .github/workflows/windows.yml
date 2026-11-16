@@ -34,6 +34,7 @@ jobs:
           path: |
             bin/FURYCUBE-G9-PRO-HUB.exe
             bin/G9Device.exe
+            bin/G9InputCheck.exe
             bin/Microsoft.Web.WebView2.Core.dll
             bin/Microsoft.Web.WebView2.WinForms.dll
             bin/WebView2Loader.dll

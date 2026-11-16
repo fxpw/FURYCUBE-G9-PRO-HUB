@@ -19,11 +19,11 @@ identified development mouse, not every device sold under the same name.
 | --- | --- |
 | Onboard button assignments | The ordinary-key fix was confirmed over USB and 2.4 GHz with the HUB closed. Assignments use guarded writes and readback. |
 | DPI, sensor and power settings | Complete wired reads and a timer write/restore were physically checked. Other setters have offline coverage. |
-| Settings over 2.4 GHz | Sensor/DPI, polling, buttons and profile reads match the USB baseline. Polling-setting writes passed CLI and Vue checks, with restoration to the original value. Other setters need individual checks; power timers/debounce still need USB. See [radio settings](docs/RADIO-SETTINGS.md). |
+| Settings over 2.4 GHz | Sensor/DPI, polling, buttons and profile reads matched the USB baseline on OL4. Polling-setting writes passed CLI and Vue checks with restoration. On current OL7, a fresh reconnect restored profile reads, but the next sensor/DPI read timed out; this remains unresolved. Power timers/debounce need USB. See [radio settings](docs/RADIO-SETTINGS.md). |
 | Custom OLED on OL4 | USB frames, numeric DPI and live clock/system widgets were confirmed while ordinary mouse input continued working. |
 | OL5 OLED and retained last frame | Installed on the development mouse; USB image and continued input were confirmed. The radio image did not appear and later configuration reads timed out, so receiver OLED is disabled in the native client and UI. Unplugging only USB with the switch already at 2.4 GHz loses the image. |
 | OL6 carrier experiment | Earlier installation introduced a separate experimental client. The owner confirmed radio input but reported missing USB mouse input. It was superseded by OL7 before any image upload. |
-| OL7 USB input guard | Currently installed. The owner confirms USB input after Windows restart; settings match the saved profile. The next radio attempt timed out on ordinary GET0C before sending an image; receiver restart returned3010. |
+| OL7 USB input guard | Currently installed. A single USB image and continued input are confirmed after Windows restart. All 117 profile bytes match the saved settings. The passive radio input check also passed all nine items. Radio sensor reading and OLED delivery remain unresolved. |
 | OL8 / OL9 candidates | Separate context-kind and checksum hypotheses have passed complete offline checks and exact updater packaging. Neither is installed. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
 | PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
@@ -39,9 +39,30 @@ automatically.
 The next hardware milestone is an ordinary working radio configuration read,
 then a visible control image. The PC-side frame cache and reconnect path are
 implemented, while ordinary receiver OLED remains disabled pending end-to-end
-qualification. No OL6/OL7 image has been sent. The brief screen change reported
+qualification. One OL7 USB image is now physically confirmed; its radio image
+remains untested after the earlier timeout. The brief screen change reported
 at startup has not been identified as host traffic or a firmware redraw.
 See [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
+
+## Quick input check
+
+Run `bin\G9InputCheck.exe --pid fa60` for the receiver, or use `--pid 2148`
+for USB. The standalone check is built by `build.cmd` or
+`tools\build-input-check.cmd` and is included in the Windows CI package.
+Add `--lang en` for English; Russian is the default.
+
+The nine rows turn green for movement, five mouse clicks, wheel up/down and
+the screen button's assigned **0** key. Buttons require both press and release.
+Only events from the selected G9 transport count; another mouse or keyboard
+cannot complete the check. The tool listens to Windows Raw Input without
+hooks, injected input, HID feature requests or device writes.
+
+After all nine rows pass, the window closes automatically after two seconds.
+Closing early or reaching the ten-minute limit saves an incomplete result with
+the missing items. Timestamped JSON reports and event logs are saved under
+`%LOCALAPPDATA%\FURYCUBE-G9-PRO\input-checks`; use `--output <new-report.json>`
+to choose a new location. This checks input only, not the OLED image or a full
+hardware/firmware qualification. The current OL7 receiver run passed 9/9.
 
 ## Build and run
 

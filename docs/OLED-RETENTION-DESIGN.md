@@ -235,8 +235,8 @@ OL7 completed34/34 update blocks and returned version`0b080101084f4c37`.
 Before any settings write the owner reported briefly seeing movement, then no
 working cursor/clicks; the passive trace at this checkpoint contains only the
 FA60 mouse source, so it does not confirm USB movement. After restoring key0
-and1600DPI, all117 profile bytes match the pre-update backup. No OL6/OL7 frame
-has been uploaded. The owner subsequently restarted Windows and confirmed
+and1600DPI, all117 profile bytes matched the pre-update backup. At that checkpoint,
+no OL6/OL7 frame had been uploaded. The owner subsequently restarted Windows and confirmed
 working USB input. A brief screen change followed by the stock display at
 connection remains unclassified; it does not prove a successful host upload.
 
@@ -254,6 +254,16 @@ rendering; startup requires the existing resume preference. Failed or stale
 submissions cannot replace the saved frame, and corrupt cache files suppress
 automatic restore. These cases have offline coverage; physical reconnect
 replay remains pending, and this cache does not prove device-side retention.
+
+After the owner returned and connected USB, a fresh OL7 version read and all
+117 logical-profile bytes matched the saved baseline. One complete USB control
+frame (12 short reports) was submitted without the HUB or live updates. The owner
+confirmed the visible `OLED OK / G9 PRO` image and all ordinary input, including
+the screen key. A passive probe restricted to wired PID2148 recorded 498 movement
+events, four left presses, one right press, six scroll events and one key0 press.
+Middle click was confirmed by the owner but was not sampled in that trace.
+No settings write or firmware update occurred. Radio qualification is next,
+following a physical receiver reconnect and mouse off/on to establish recovery.
 
 Payload2032 SHA256:`1c7da04f67a9d40346d2fcf9dc34b2490ef6a41cea47c8837485ce8b98b58290`.
 Raw136120 SHA256:`bdb11da81885db47f7498f63643c1750e685eeca701e6054266ff4787e894f24`.
