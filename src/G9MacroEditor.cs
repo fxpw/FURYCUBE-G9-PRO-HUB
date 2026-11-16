@@ -7,7 +7,7 @@ using System.IO;
 using System.Windows.Forms;
 
 namespace Furycube.G9.Macros {
-    public sealed class G9MacroEditor : UserControl {
+    public sealed partial class G9MacroEditor : UserControl {
         readonly Action<string> log;readonly ListBox names=new ListBox();readonly DataGridView grid=new DataGridView();
         readonly TextBox name=new TextBox();readonly ComboBox repeat=new ComboBox(),kind=new ComboBox(),key=new ComboBox(),mouse=new ComboBox(),delayMode=new ComboBox();
         readonly NumericUpDown count=Number(1,999,1),x=Number(-32768,32767,0),y=Number(-32768,32767,0),wheel=Number(-32768,32767,120),delay=Number(0,99999,10),fixedDelay=Number(0,99999,10);

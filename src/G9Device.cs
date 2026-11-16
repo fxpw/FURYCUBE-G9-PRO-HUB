@@ -173,16 +173,18 @@ internal static class G9Hid {
 internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRuntimeStatusDeviceSession, IG9SettingsSession {
     readonly SafeFileHandle handle;
     readonly object oledGate = new object();
-    bool oledAuthorized, oledRuntimeStatusAuthorized;
+    bool oledAuthorized, oledRuntimeStatusAuthorized, oledShortReportsAuthorized, oledRadioAuthorized;
     internal readonly G9Hid.Candidate Device;
     public ushort VendorId { get { return 0x1D57; } }
     public ushort ProductId { get { return Device.Product; } }
-    internal G9Connection(ushort requestedPid) {
+    internal G9Connection(ushort requestedPid, string expectedPath = null) {
         List<G9Hid.Candidate> all = G9Hid.Enumerate(); ushort wanted = requestedPid;
         if (wanted == 0) { wanted = 0xFA60; foreach (var item in all) if (item.Product == 0x2148) wanted = 0x2148; }
         var matches = all.FindAll(delegate(G9Hid.Candidate item) { return item.Product == wanted; });
         if (matches.Count != 1) throw new InvalidOperationException(matches.Count == 0 ? "G9 configuration interface is not connected" : "Multiple matching G9 devices; refusing an ambiguous transaction");
-        Device = matches[0]; handle = G9Hid.Open(Device.Path);
+        Device = matches[0];
+        if(expectedPath!=null&&!String.Equals(expectedPath,Device.Path,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("The selected mouse changed; reread the device before any operation.");
+        handle = G9Hid.Open(Device.Path);
         Console.WriteLine("TARGET VID=1d57 PID={0:x4} featureBytes={1} path={2}", Device.Product, Device.FeatureBytes, Device.Path);
     }
     byte[] Get(byte report, int length) {
@@ -245,54 +247,65 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             return G9SettingsTransactions.RestoreProfilePair(this,snapshotFile,backupDirectory);
         }
     }
-    void EnsureWiredOledIdentity() {
-        if (Device.Product != 0x2148 || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes < OledProtocol.FeatureBytes) {
+    void EnsureOledIdentity(bool discovery = false) {
+        if ((Device.Product != 0x2148 && Device.Product != 0xFA60) || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes < OledShortProtocol.FeatureBytes) {
             oledAuthorized = oledRuntimeStatusAuthorized = false;
-            throw new OledFirmwareUnsupportedException("OLED uploads require the same open wired G9 1D57:2148 configuration interface.");
+            throw new OledFirmwareUnsupportedException("OLED operations require the same open normal G9 configuration interface.");
         }
         var attributes = new G9Hid.Attributes { Size = (uint)Marshal.SizeOf(typeof(G9Hid.Attributes)) };
-        if (!G9Hid.HidD_GetAttributes(handle, ref attributes) || attributes.Vendor != 0x1D57 || attributes.Product != 0x2148) {
+        if (!G9Hid.HidD_GetAttributes(handle, ref attributes) || attributes.Vendor != 0x1D57 || attributes.Product != Device.Product) {
             oledAuthorized = oledRuntimeStatusAuthorized = false; throw new OledFirmwareUnsupportedException("The opened device identity changed; OLED operations are disabled.");
         }
+        if (Device.Product == 0xFA60 && !discovery && !oledRadioAuthorized)
+            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL5 discovery on this same handle.");
     }
     public byte[] ReadOledFirmware() {
         lock (oledGate) {
-            oledAuthorized = oledRuntimeStatusAuthorized = false; EnsureWiredOledIdentity();
+            oledAuthorized = oledRuntimeStatusAuthorized = oledShortReportsAuthorized = oledRadioAuthorized = false; EnsureOledIdentity(true);
             byte[] reply = ReadFirmware();
-            try { oledRuntimeStatusAuthorized = OledProtocol.DecodeFirmwareCapabilities(reply).SupportsRuntimeStatus; }
+            try {
+                var capabilities = OledProtocol.DecodeFirmwareCapabilities(reply);
+                OledProtocol.ValidateDeviceFirmware(capabilities, VendorId, ProductId);
+                oledRuntimeStatusAuthorized = capabilities.SupportsRuntimeStatus;
+                oledShortReportsAuthorized = capabilities.SupportsShortWrites;
+                oledRadioAuthorized = capabilities.SupportsRadioWrites;
+            }
             catch (InvalidDataException error) { throw new OledFirmwareUnsupportedException(error.Message); }
+            catch (NotSupportedException error) { throw new OledFirmwareUnsupportedException(error.Message); }
             oledAuthorized = true; return reply;
         }
     }
     public void SendOledFeature(byte[] report) {
         lock (oledGate) {
-            if (!oledAuthorized) throw new InvalidOperationException("This device handle has not advertised supported OL2/OL3 firmware");
-            EnsureWiredOledIdentity(); OledProtocol.DecodeWritePage(report);
+            if (!oledAuthorized) throw new InvalidOperationException("This device handle has not advertised supported OLED firmware");
+            EnsureOledIdentity();
+            if (!oledShortReportsAuthorized) throw new OledFirmwareUnsupportedException("OL4 is required for single-packet OLED writes; OL2/OL3 image uploads are disabled.");
+            OledShortProtocol.ValidateWriteChunk(report);
             if (!G9Hid.HidD_SetFeature(handle, report, report.Length)) {
                 oledAuthorized = oledRuntimeStatusAuthorized = false; throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED SetFeature failed; remaining pages were not sent");
             }
-            Console.WriteLine("OLED_SEND len={0} page={1} flags={2}", report.Length, report[7], report[9]);
+            Console.WriteLine("OLED_SEND len={0} page={1} x={2} flags={3}", report.Length, report[7], report[8], report[10]);
         }
     }
     public byte[] ReadOledRuntimeStatus() {
         lock (oledGate) {
             if (!oledAuthorized || !oledRuntimeStatusAuthorized)
-                throw new OledFirmwareUnsupportedException("OL3 discovery on this same open handle is required; stock/OL2 never receive GET 0x22.");
-            EnsureWiredOledIdentity();
+                throw new OledFirmwareUnsupportedException("OL3/OL4 discovery on this same open handle is required; stock/OL2 never receive GET 0x22.");
+            EnsureOledIdentity();
             try {
                 G9Wire.ValidateAck(Get(0xA0, 8), false); Thread.Sleep(100);
-                EnsureWiredOledIdentity();
+                EnsureOledIdentity();
                 // This dedicated query is not admitted by the generic configuration
-                // allowlist. Only OL3 on this verified handle can reach this send.
-                byte[] query = OledRuntimeStatusCodec.BuildReadRequest();
+                // allowlist. Only OL3/OL4 on this verified handle can reach this send.
+                byte[] query = OledRuntimeStatusCodec.BuildReadRequest(oledShortReportsAuthorized);
                 if (!G9Hid.HidD_SetFeature(handle, query, query.Length))
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), "OL3 runtime status query failed");
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED runtime status query failed");
                 Console.WriteLine("RUNTIME_QUERY len=8");
                 var deadline=System.Diagnostics.Stopwatch.StartNew();
                 Furycube.G9.Protocol.G9ReadHandshake.WaitForReady(delegate {return Get(0xA0,8);},Thread.Sleep,delegate {return deadline.ElapsedMilliseconds;},2000,100,500);
                 Thread.Sleep(100);
-                EnsureWiredOledIdentity();
-                byte[] response = Get(0x22, OledRuntimeStatusCodec.FeatureBytes); Thread.Sleep(150);
+                EnsureOledIdentity();
+                byte[] response = Get(0x22, oledShortReportsAuthorized ? 64 : OledRuntimeStatusCodec.FeatureBytes); Thread.Sleep(150);
                 OledRuntimeStatusCodec.Decode(response, DateTimeOffset.UtcNow);
                 return response; // Consume exactly once even when validation fails.
             } catch { oledAuthorized = oledRuntimeStatusAuthorized = false; throw; }
@@ -341,7 +354,7 @@ internal static class G9DeviceProgram {
             if (args.Length == 0) { Console.WriteLine("G9Device mapping [--active|--profile1..5] | assign --profile N --index N --function HEX --param1 HEX --param2 HEX | settings-read [--profile N] | settings-set --field ID --value VALUE [--profile N] | profile-restore --file <settings snapshot.json> | inspect | profile | firmware | zero | backup | restore <backup.bin> | oled-caps | oled-status | oled-frame --file <480-byte-frame.bin> | oled-stream | caps [--pid2148|fa60] [--backup-dir path]"); return 2; }
             string command = args[0];
             if (command != "inspect" && command != "mapping" && command != "profile" && command != "profile-restore" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "settings-read" && command != "settings-set" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-stream" && command != "caps") throw new ArgumentException("Unknown command");
-            ushort pid = 0; string restore = null;
+            ushort pid = 0; string restore = null, expectedPath = null;
             string frameFile = null; byte[] oledFrame = null;
             int? assignmentIndex = null; byte? function = null; byte param1 = 0, param2 = 0;
             int? requestedProfile=null; bool activeMapping=false; string settingField=null,settingValue=null;
@@ -350,6 +363,8 @@ internal static class G9DeviceProgram {
             for (int i = 1; i < args.Length; i++) {
                 if (args[i] == "--pid" && i + 1 < args.Length) {
                     if (!ushort.TryParse(args[++i], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out pid) || (pid != 0x2148 && pid != 0xFA60)) throw new ArgumentException("Unsupported PID");
+                } else if(args[i]=="--expected-path"&&i+1<args.Length&&expectedPath==null) {
+                    expectedPath=args[++i];if(expectedPath.Length<20||expectedPath.Length>1024||expectedPath.IndexOfAny(new[]{'"','\r','\n','\0'})>=0)throw new ArgumentException("Invalid expected HID path");
                 } else if (args[i] == "--backup-dir" && i + 1 < args.Length) backupDirectory = Path.GetFullPath(args[++i]);
                 else if(args[i]=="--profile" && i+1<args.Length && (command=="mapping" || command=="assign" || command=="inspect" || command=="backup" || command=="zero" || command=="restore" || command=="settings-read" || command=="settings-set")) {
                     int parsed; if(requestedProfile.HasValue || !Int32.TryParse(args[++i],NumberStyles.None,CultureInfo.InvariantCulture,out parsed) || parsed<1 || parsed>5)
@@ -391,12 +406,13 @@ internal static class G9DeviceProgram {
                     Console.WriteLine("CAPS VID=1d57 PID={0:x4} version={1:x4} featureBytes={2} path={3}", candidate.Product, candidate.Version, candidate.FeatureBytes, candidate.Path);
                 Console.WriteLine("CAPS ONLY: no feature reports requested or settings written."); return 0;
             }
-            using (var device = new G9Connection(pid)) {
+            using (var device = new G9Connection(pid,expectedPath)) {
                 if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out, new NativeOledTransport(device));
                 if (command == "oled-caps" || command == "oled-frame" || command == "oled-status") {
                     var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();
                     Console.WriteLine("OLED_CAPS_JSON " + new JavaScriptSerializer().Serialize(new { supported = true, extension = capabilities.Extension, width = capabilities.Width,
-                        height = capabilities.VisibleHeight, bufferBytes = capabilities.BufferBytes, supportsRuntimeStatus = capabilities.SupportsRuntimeStatus, physicalVerified = false }));
+                        height = capabilities.VisibleHeight, bufferBytes = capabilities.BufferBytes, supportsRuntimeStatus = capabilities.SupportsRuntimeStatus,
+                        supportsShortWrites = capabilities.SupportsShortWrites, supportsRadioWrites=capabilities.SupportsRadioWrites, physicalVerified = false }));
                     if (command == "oled-status") {
                         if (!capabilities.SupportsRuntimeStatus) { Console.WriteLine("OLED_STATUS_UNSUPPORTED"); return 4; }
                         Console.WriteLine("OLED_STATUS_DATA " + Convert.ToBase64String(uploader.ReadRuntimeStatusFrame()));
@@ -443,6 +459,11 @@ internal static class G9DeviceProgram {
             }
         } catch (OledFirmwareUnsupportedException error) { Console.WriteLine("OLED_UNSUPPORTED " + error.Message); return 4; }
         catch (NotSupportedException error) { Console.Error.WriteLine("ERROR: " + error.Message); return 1; }
-        catch (Exception error) { Console.Error.WriteLine("ERROR: " + error.Message); return 1; }
+        catch (Exception error) {
+            var nativeError = error as Win32Exception;
+            Console.Error.WriteLine("ERROR: " + error.Message + (nativeError == null ? "" :
+                " (Win32=" + nativeError.NativeErrorCode + ": " + new Win32Exception(nativeError.NativeErrorCode).Message + ")"));
+            return 1;
+        }
     }
 }

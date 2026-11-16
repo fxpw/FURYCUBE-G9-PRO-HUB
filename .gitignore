@@ -3,6 +3,9 @@ portable-hub/
 bin/
 patch-output/
 dist/
+.deps/
+frontend/node_modules/
+frontend/dist/
 tools/pyenv/
 *.obj
 *.pdb

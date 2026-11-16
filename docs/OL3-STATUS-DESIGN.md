@@ -1,9 +1,32 @@
 # OL3 configured-DPI status: protocol and offline proof
 
-Updated: 2026-11-09. **Offline candidate; not installed or physically validated.**
+**Historical OL3 design snapshot, 2026-11-09.** Its offline results and protocol
+description are retained below. Subsequent owner-authorized experiments installed
+OL3 and physically validated a CRC-valid GS3 status reply. Its long GO2 image
+write exposed a stock USB packet-assembly fault; native OL2/OL3 image writes are
+now disabled. Initial OL4 was installed and its first control image was visibly
+confirmed. A later OL4 with the discovery-race correction is now installed and
+passed four consecutive physical status/version cycles. The owner also confirmed
+visible, updating widgets on that corrected OL4. Sleep/retention remains unverified.
+The owner subsequently reported no cursor/click input, including after closing
+the HUB and helper. Windows reboot restored input; the current 708-byte EP2-guard
+OL4 then passed single-chunk, full-frame and timed ten-second live tests with
+working input. The owner confirmed simultaneous input/widgets; movement and left
+clicks were also captured passively. The earlier persistent cause is not fully
+isolated. The owner also confirmed the positioned PNG with normal input still
+working. The final 2.4 GHz input/key check also passed. After changing from cable
+to radio, the owner observed the stock screen; the exact reset trigger remains
+unisolated and cross-mode image retention is unsupported. The physical numeric-DPI
+GUI widget has not been tested. See the
+[current OL4 investigation](OLED-USB-CHUNKS.md) and [recovery status](RECOVERY.md).
+
+At the historical snapshot date, the candidate was offline-only and had not
+been installed or physically validated.
 The existing OL2 source/payload/builders are unchanged. OL3 adds a new version
 marker and a status response alongside the inherited GO2 page uploader.
-The [recovery gate](RECOVERY.md) still blocks firmware installation.
+The recovery prerequisite recorded for that snapshot was later superseded by
+the owner's explicit accepted-risk experiment; independent recovery remains
+unverified. The historical text does not reinstate the old owner-specific gate.
 
 ## Exact source and meaning
 
@@ -174,6 +197,7 @@ explicit stub; no installed firmware was read or written. All candidate files
 remain ignored under a unique `patch-output` directory. Own payload HEX is
 publishable source; official images and per-device contents are not.
 
-Software integration may continue. Installation and physical validation remain
-blocked until independent recovery and a full current backup/equivalent exact
-restoration are demonstrated.
+At this snapshot date, the owner required independent recovery and a full current
+backup/equivalent exact restoration before installation. The later accepted-risk
+authorization supersedes that owner-specific prerequisite, as recorded in
+[RECOVERY.md](RECOVERY.md); it does not supply a verified recovery method.

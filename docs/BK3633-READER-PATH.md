@@ -4,7 +4,36 @@ Offline audit, 2026-11-09. Target identity is the **replacement actual-unit phot
 
 The audited artifact remains **BKFIL 2.1.12.1**, `bk_loader.exe` SHA256 `79d1d6e30eda7527099c7bdd2b2241488973b68623b4ecfbe87793a176c0d80b`. It is not silently substituted for the BK3633-recommended 2.1.10.0. Version/source details and the already qualified page-frame codec are in [RECOVERY-UART.md](RECOVERY-UART.md) and [RECOVERY-NEXT-STEPS.md](RECOVERY-NEXT-STEPS.md).
 
-## New bounded proof
+## 2026-11-15 qualification update
+
+Subsequent original-instruction analysis narrows two earlier conclusions.
+`--bt-nomid` really bypasses the entire MID query and the `0x4535D0` vendor
+preparation. Its synthetic `4B42FF` is a **host-table default**, not a measured
+chip/flash identity. With an explicit range, the common class uses the same
+READ09 page protocol; the BK3436 table label alone does not establish an
+incompatible wire protocol. Do not infer this mouse's capacity from that row.
+
+However, the full vendor executable is still not a suitable fail-closed probe:
+failed initial AA55 can invoke another connector, page errors can reconnect,
+and outer failure cleanup can issue reboot regardless of the ordinary reboot
+option. Five isolated original-code fixtures verified the handshake, baud
+encoder, MID bypass and success/failure exit behaviours, with all I/O replaced.
+This is not a physical compatibility or complete-session test.
+
+The useful path is an independent, bounded reader that allows only the
+qualified link/read frames, aborts on errors, and has no automatic preparation,
+reset, baud escalation or fallback. An offline state machine is being prepared
+using the existing `g9_backup_archive.py` page codec; no live transport has been
+qualified. Installed loader entry, access policy, representation and restoration
+remain separate open questions.
+
+The user now has a separately tested FT232RL. Reported continuity supports
+P00/D− and P01 at the left-click switch middle terminal; P01 idle is 2.77 V.
+Adapter TX is 3.29 V and electrical compatibility remains unqualified. See
+[board checks](PCB-CONTINUITY.md) and [adapter checks](FTDI-BENCH-CHECK.md).
+The earlier no-adapter statement below is superseded. No loader was entered.
+
+## Earlier bounded proof (read with the update above)
 
 | Original PE location | Observation | Consequence for this BK3633 board |
 |---|---|---|

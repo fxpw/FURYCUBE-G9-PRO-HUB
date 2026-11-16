@@ -75,9 +75,12 @@ internal sealed class G9OledWorker : IDisposable {
                     }else if(line.StartsWith("OLED_STATUS_DATA ",StringComparison.Ordinal)){
                         if(statusDataReceived)throw new FormatException("Повторный ответ состояния OLED.");
                         string encoded=line.Substring(17);
-                        if(encoded.Length!=176)throw new FormatException("Неверный размер состояния OLED.");
+                        // The child checks the negotiated firmware's exact wire
+                        // length before emitting DATA. This pipe accepts canonical
+                        // GS4/64B and legacy GS3/132B; the codec checks header/CRC.
+                        if(encoded.Length!=88&&encoded.Length!=176)throw new FormatException("Неверный размер состояния OLED.");
                         byte[] payload=Convert.FromBase64String(encoded);
-                        if(payload.Length!=132||Convert.ToBase64String(payload)!=encoded)throw new FormatException("Неверная кодировка состояния OLED.");
+                        if((payload.Length!=64&&payload.Length!=132)||Convert.ToBase64String(payload)!=encoded)throw new FormatException("Неверная кодировка состояния OLED.");
                         pendingStatus=OledRuntimeStatusCodec.Decode(payload,DateTimeOffset.UtcNow);statusDataReceived=true;
                     }else if(line.StartsWith("OLED_STATUS_SENT ",StringComparison.Ordinal)){
                         int index;
@@ -94,7 +97,7 @@ internal sealed class G9OledWorker : IDisposable {
         if(!line.StartsWith("OLED_SEND ",StringComparison.Ordinal)&&!line.StartsWith("OLED_FRAME_SENT",StringComparison.Ordinal)&&!line.StartsWith("OLED_STATUS_",StringComparison.Ordinal))SafeLog(line);
     }
     string FailureText(string problem){int code;return TryExited(out code)&&code==4?
-        "Штатная прошивка не поддерживает OL2. Кадр не отправлен; требуется проверенное восстановление перед установкой расширения.":problem;}
+        "Прошивка мыши не поддерживает выбранную операцию OLED. Для картинок нужна OL4 и подключение USB; кадр не отправлен.":problem;}
     enum Completion { Ready, Frame, Status }
     void WaitFor(Completion completion,int index){
         var watch=Stopwatch.StartNew();

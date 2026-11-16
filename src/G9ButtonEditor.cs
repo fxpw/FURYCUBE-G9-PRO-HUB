@@ -20,6 +20,12 @@ internal sealed class G9MappingSnapshot {
     public string keymapHex { get; set; }
     public G9MappingRow[] buttons { get; set; }
     internal byte[] Keys;
+    internal static G9MappingSnapshot FromKeymap(int profile,byte[] keys) {
+        if(keys==null || keys.Length!=59)throw new InvalidDataException("Неверный размер таблицы кнопок.");
+        var rows=new G9MappingRow[18];
+        for(int i=0;i<rows.Length;i++){int at=3+3*i;rows[i]=new G9MappingRow {index=i,function=keys[at],param1=keys[at+1],param2=keys[at+2]};}
+        return Parse("MAPPING_JSON "+new JavaScriptSerializer().Serialize(new {profile=profile,keymapHex=BitConverter.ToString(keys).Replace("-",""),buttons=rows}));
+    }
     internal void RequireMatches(byte[] expected) {
         if(expected==null||expected.Length!=59||Keys==null||Keys.Length!=59)throw new InvalidDataException("Неверный размер ожидаемой таблицы.");
         for(int i=0;i<expected.Length;i++)if(Keys[i]!=expected[i])throw new InvalidDataException("Прочитанная таблица отличается от ожидаемой. Перечитайте назначения перед следующей записью.");
@@ -169,7 +175,27 @@ internal sealed class G9ButtonEditor : UserControl {
         tips.SetToolTip(reserved, "Слоты старого HUB, для которых не подтверждена отдельная физическая кнопка. Текущее значение сохраняется, пока вы его не измените.");
         tips.SetToolTip(apply, "Меняется только выбранное назначение. Перед записью создаётся резервная копия, затем таблица читается повторно.");
         FillButtons(); FillActions(null,true);UpdateApply();
-        status.Text = "Нажмите «Прочитать из мыши». Будет прочитан активный профиль. Назначения хранятся в мыши и работают после закрытия HUB.";
+        status.Text = "При запуске HUB прочитает активный профиль. Назначения хранятся в мыши и работают после закрытия HUB.";
+        categories.SelectedIndexChanged+=delegate {if(!changing)startupTouched=true;};
+        actions.SelectedIndexChanged+=delegate {if(!changing)startupTouched=true;};
+        keys.SelectedIndexChanged+=delegate {if(!changing)startupTouched=true;};
+        parameter.ValueChanged+=delegate {if(!changing)startupTouched=true;};
+        foreach(var modifier in modifiers)modifier.CheckedChanged+=delegate {if(!changing)startupTouched=true;};
+    }
+    bool startupTouched;
+    int deviceEpoch;
+    internal void SuspendDevice() {
+        deviceEpoch++;snapshot=null;
+        if(!startupTouched)FillButtons();
+        UpdateApply();status.ForeColor=Color.DarkGoldenrod;
+        status.Text="Подключение изменилось. Открытые правки сохранены; перед записью перечитайте назначения.";
+    }
+    internal bool AcceptStartupSnapshot(G9MappingSnapshot value) {
+        if(IsDisposed || Disposing || busy || snapshot!=null || startupTouched)return false;
+        if(value==null)throw new ArgumentNullException("value");
+        snapshot=G9MappingSnapshot.FromKeymap(value.profile,value.Keys); FillButtons();UpdateApply();
+        status.ForeColor=Color.DarkGreen;status.Text="При запуске прочитаны назначения профиля "+snapshot.profile+". Запись выполняется только по вашей команде.";
+        return true;
     }
     void FillButtons() {
         int index = SelectedIndex(); changing = true; buttons.Items.Clear();
@@ -262,13 +288,16 @@ internal sealed class G9ButtonEditor : UserControl {
         apply.Enabled=!busy&&snapshot!=null&&action!=null&&keyboardValid;
     }
     async Task LoadMapping() {
+        startupTouched=true;
+        int epoch=deviceEpoch;
         if (busy) return; SetBusy(true); status.Text = "Читаю назначения…";
-        try { snapshot = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping --active"); })); FillButtons(); status.ForeColor = Color.DarkGreen; status.Text = "Таблица профиля " + snapshot.profile + " прочитана. Выберите кнопку и действие."; }
-        catch (Exception error) { snapshot=null;FillButtons();Report(error); }
+        try { var received = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping --active"); }));if(epoch!=deviceEpoch||IsDisposed)return;snapshot=received; FillButtons(); status.ForeColor = Color.DarkGreen; status.Text = "Таблица профиля " + snapshot.profile + " прочитана. Выберите кнопку и действие."; }
+        catch (Exception error) { if(epoch==deviceEpoch&&!IsDisposed){snapshot=null;FillButtons();Report(error);} }
         finally { SetBusy(false); }
     }
     async Task SaveAssignment() {
         if (busy || snapshot == null) return;
+        int epoch=deviceEpoch;
         try {
             var action = actions.SelectedItem as BindingAction; if (action == null) return;
             byte p1 = action.DefaultParam1, p2 = action.DefaultParam2;
@@ -280,16 +309,19 @@ internal sealed class G9ButtonEditor : UserControl {
             string command = string.Format(CultureInfo.InvariantCulture, "assign --profile {0} --index {1} --function {2:X2} --param1 {3:X2} --param2 {4:X2}", profile, index, action.Function, p1, p2);
             SetBusy(true); status.Text = "Сохраняю назначение и проверяю чтением…";
             await Task.Run(delegate { runDevice(command); });
-            snapshot = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping --profile " + profile.ToString(CultureInfo.InvariantCulture)); }));
+            if(epoch!=deviceEpoch||IsDisposed)return;
+            var received = G9MappingSnapshot.Parse(await Task.Run(delegate { return runDevice("mapping --profile " + profile.ToString(CultureInfo.InvariantCulture)); }));
+            if(epoch!=deviceEpoch||IsDisposed)return;snapshot=received;
             snapshot.RequireMatches(expected);
             FillButtons();
             status.ForeColor = Color.DarkGreen; status.Text = "Назначение записано и прочитано обратно. Проверьте действие выбранной кнопки.";
             if(MappingChanged!=null)MappingChanged(this,EventArgs.Empty);
-        } catch (Exception error) { snapshot=null;FillButtons();Report(error); }
+        } catch (Exception error) { if(epoch==deviceEpoch&&!IsDisposed){snapshot=null;FillButtons();Report(error);} }
         finally { SetBusy(false); }
     }
     void SetBusy(bool value) { busy = value; read.Enabled = !value; buttons.Enabled = reserved.Enabled = categories.Enabled = actions.Enabled = keyboardPanel.Enabled = parameterPanel.Enabled = !value;UpdateApply(); }
     internal void InvalidateProfile() {
+        startupTouched=true;
         snapshot = null; FillButtons(); UpdateApply();
         status.ForeColor = Color.DarkGoldenrod;
         status.Text = "Профиль изменён. Прочитайте назначения из мыши перед следующей записью.";

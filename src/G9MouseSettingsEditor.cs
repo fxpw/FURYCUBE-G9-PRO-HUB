@@ -156,6 +156,14 @@ internal sealed class G9MouseSettingsEditor : UserControl {
     G9SettingsSnapshot snapshot;
     byte[] pendingKeys;
     bool busy;
+    bool startupTouched;
+    int deviceEpoch;
+    internal void SuspendDevice() {
+        deviceEpoch++;bool preserve=busy || DraftChanges().Count>0 || includeButtons.Checked&&pendingKeys!=null;
+        startupTouched=preserve;snapshot=null;
+        if(!preserve)ShowSnapshot();else UpdateButtons();
+        status.ForeColor=Color.DarkGoldenrod;status.Text="Подключение изменилось. Правки сохранены в редакторе; перед записью перечитайте настройки.";
+    }
     internal event EventHandler ProfileChanged;
 
     internal G9MouseSettingsEditor(Func<string,string> run, Action<string> log) {
@@ -178,14 +186,16 @@ internal sealed class G9MouseSettingsEditor : UserControl {
         ShowSnapshot();
     }
     internal async Task ReadSettings() {
+        startupTouched=true;
+        int epoch=deviceEpoch;
         if (busy) return; SetBusy(true); status.Text="Читаю текущий профиль, DPI, сенсор и питание…";
         try {
-            snapshot=G9SettingsSnapshot.Parse(await Task.Run(delegate { return device("settings-read"); }), false);
-            if(IsDisposed || Disposing)return;
+            var received=G9SettingsSnapshot.Parse(await Task.Run(delegate { return device("settings-read"); }), false);
+            if(IsDisposed || Disposing || epoch!=deviceEpoch)return;snapshot=received;
             ShowSnapshot(); status.ForeColor=Color.DarkGreen;
             status.Text="Настройки прочитаны. Меняйте значения и нажмите «Применить изменения».";
             if(ProfileChanged!=null)ProfileChanged(this,EventArgs.Empty);
-        } catch (Exception error) { if(!IsDisposed && !Disposing)Invalidate(error); }
+        } catch (Exception error) { if(!IsDisposed && !Disposing && epoch==deviceEpoch)Invalidate(error); }
         finally { if(!IsDisposed && !Disposing)SetBusy(false); }
     }
     void ShowSnapshot() {
@@ -240,6 +250,13 @@ internal sealed class G9MouseSettingsEditor : UserControl {
             var libraryPage=new TabPage("Библиотека настроек");
             libraryPage.Controls.Add(new G9ProfileLibrary(CapturePreset,OpenPreset,logger));pages.TabPages.Add(libraryPage);
         } finally { pages.ResumeLayout(); UpdateButtons(); }
+    }
+    internal bool AcceptStartupSnapshot(G9SettingsSnapshot value) {
+        if(IsDisposed || Disposing || busy || snapshot!=null || startupTouched)return false;
+        if(value==null)throw new ArgumentNullException("value");
+        snapshot=value;ShowSnapshot();status.ForeColor=Color.DarkGreen;
+        status.Text="При запуске прочитаны настройки активного профиля. Запись выполняется только по кнопке «Применить изменения».";
+        return true;
     }
     static string Category(G9SettingsField field) {
         if (!field.canWrite) return "Доступность";
@@ -296,6 +313,7 @@ internal sealed class G9MouseSettingsEditor : UserControl {
     }
     async Task ApplyChanges() {
         if (busy || snapshot==null) return;
+        int epoch=deviceEpoch;
         var changes=DraftChanges();byte[] keysToApply=includeButtons.Checked?pendingKeys:null;
         if (changes.Count==0 && keysToApply==null) return;
         List<KeyValuePair<string,string>> edits;
@@ -308,28 +326,28 @@ internal sealed class G9MouseSettingsEditor : UserControl {
         SetBusy(true);
         try {
             foreach (var edit in edits) {
-                if(IsDisposed || Disposing)return;
+                if(IsDisposed || Disposing || epoch!=deviceEpoch)return;
                 int profile=snapshot.profile;
                 status.Text="Сохраняю " + Caption(edit.Key) + " (" + (completed+1) + "/" + edits.Count + ")…";
                 string command="settings-set --profile " + profile.ToString(CultureInfo.InvariantCulture) + " --field " + edit.Key + " --value " + edit.Value;
                 var readback=G9SettingsSnapshot.Parse(await Task.Run(delegate { return device(command); }),true);
-                if(IsDisposed || Disposing)return;
+                if(IsDisposed || Disposing || epoch!=deviceEpoch)return;
                 if (readback.changedField!=edit.Key) throw new InvalidDataException("Ответ относится к другому изменению.");
                 var field=readback.fields.FirstOrDefault(delegate(G9SettingsField f) { return f.id==edit.Key; });
                 if (field==null || field.value!=edit.Value) throw new InvalidDataException("Прочитано другое значение параметра.");
                 snapshot=readback; completed++;
             }
             if(keysToApply!=null) {
-                if(IsDisposed || Disposing)return;
+                if(IsDisposed || Disposing || epoch!=deviceEpoch)return;
                 status.Text="Переношу назначения из набора и проверяю чтением…";
                 int profile=snapshot.profile;
                 string directory=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","backups","profile-drafts");Directory.CreateDirectory(directory);
                 string path=Path.Combine(directory,Guid.NewGuid().ToString("N")+".bin");
                 File.WriteAllBytes(path,BindingCatalog.RetargetKeymap(keysToApply,profile));
                 await Task.Run(delegate { device("restore \""+path+"\" --pid 2148 --profile "+profile.ToString(CultureInfo.InvariantCulture)); });
-                if(IsDisposed || Disposing)return;
+                if(IsDisposed || Disposing || epoch!=deviceEpoch)return;
                 var readback=G9SettingsSnapshot.Parse(await Task.Run(delegate {return device("settings-read --pid 2148 --profile "+profile.ToString(CultureInfo.InvariantCulture));}),false);
-                if(IsDisposed || Disposing)return;
+                if(IsDisposed || Disposing || epoch!=deviceEpoch)return;
                 if(!readback.Keys.SequenceEqual(keysToApply))throw new InvalidDataException("Назначения после переноса расходятся с набором.");
                 snapshot=readback;completed++;
                 if(ProfileChanged!=null)ProfileChanged(this,EventArgs.Empty);
@@ -338,7 +356,7 @@ internal sealed class G9MouseSettingsEditor : UserControl {
             status.Text="Изменения сохранены и проверены чтением. Копии исходных настроек — в локальной папке backups.";
             if (oldProfile!=snapshot.profile && ProfileChanged!=null) ProfileChanged(this,EventArgs.Empty);
         } catch (Exception error) {
-            if(IsDisposed || Disposing)return;
+            if(IsDisposed || Disposing || epoch!=deviceEpoch)return;
             snapshot=null; ShowSnapshot();
             if (ProfileChanged!=null) ProfileChanged(this,EventArgs.Empty);
             Report(new InvalidOperationException("Подтверждено изменений: " + completed + ". " + error.Message + " Перечитайте настройки перед следующей записью."));
@@ -393,7 +411,7 @@ internal sealed class G9MouseSettingsEditor : UserControl {
         status.Text="Набор открыт как правки. Проверьте значения и нажмите «Применить изменения», чтобы записать их в мышь.";
     }
     void Invalidate(Exception error) { snapshot=null; ShowSnapshot(); Report(error); }
-    internal void InvalidateProfile() {snapshot=null;ShowSnapshot();status.ForeColor=Color.DarkGoldenrod;status.Text="Назначения или профиль изменены. Прочитайте текущие настройки заново.";}
+    internal void InvalidateProfile() {startupTouched=true;snapshot=null;ShowSnapshot();status.ForeColor=Color.DarkGoldenrod;status.Text="Назначения или профиль изменены. Прочитайте текущие настройки заново.";}
     void Report(Exception error) { status.ForeColor=Color.DarkRed; status.Text=error.Message; if(logger!=null)logger(error.Message); }
     void SetBusy(bool value) { busy=value; pages.Enabled=!value; UpdateButtons(); }
     void UpdateButtons() {

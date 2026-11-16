@@ -30,6 +30,7 @@ jobs:
             README.md
             PLAN.md
             docs/
+            examples/
             firmware/OLED-PROTOCOL.md
             LICENSE
           if-no-files-found: error

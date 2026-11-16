@@ -129,17 +129,50 @@ internal static class MouseSettingsEditorTests {
             } catch(Exception error) { Console.Error.WriteLine("UI fixture original failure (calls="+calls+", status="+Field<Label>(editor,"status").Text+"): "+error);throw; }
         }
     }
+    static void StartupReadback() {
+        int calls=0;var snapshot=Snapshot(Fixture());
+        Func<string,string> noDevice=delegate(string command){calls++;throw new Exception("No device call allowed");};
+        using(var editor=new G9MouseSettingsEditor(noDevice,delegate{})) {
+            Check(editor.AcceptStartupSnapshot(snapshot),"startup fills empty settings editor from one full read");
+            Check(editor.DraftChanges().Count==0&&!Field<Button>(editor,"apply").Enabled,"startup readback neither creates edits nor enables unchanged apply");
+            Draft(editor,"debounce.ms","10");
+            Check(!editor.AcceptStartupSnapshot(snapshot)&&editor.DraftChanges()["debounce.ms"]=="10","late startup result preserves existing settings draft");
+            editor.SuspendDevice();Check(editor.DraftChanges()["debounce.ms"]=="10"&&!Field<Button>(editor,"apply").Enabled&&!editor.AcceptStartupSnapshot(snapshot),"target change preserves settings draft while invalidating its writable baseline");
+            editor.InvalidateProfile();Check(!editor.AcceptStartupSnapshot(snapshot),"stale startup result cannot undo profile invalidation");
+        }
+        using(var editor=new G9MouseSettingsEditor(noDevice,delegate{})) {
+            typeof(G9MouseSettingsEditor).GetMethod("SetBusy",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(editor,new object[]{true});
+            Check(!editor.AcceptStartupSnapshot(snapshot),"startup cannot replace an in-flight manual operation");
+        }
+        Check(calls==0,"applying startup readback invokes no CLI write or read");
+    }
+    static async Task DelayedTransitionReadback() {
+        string output=Output(Document(Fixture(),false),false);
+        using(var release=new System.Threading.ManualResetEventSlim())
+        using(var editor=new G9MouseSettingsEditor(delegate(string command){release.Wait(5000);return output;},delegate{})) {
+            int notifications=0;editor.ProfileChanged+=delegate {notifications++;};
+            Task pending=editor.ReadSettings();editor.SuspendDevice();release.Set();await pending;
+            Check(Field<G9SettingsSnapshot>(editor,"snapshot")==null&&!Field<Button>(editor,"apply").Enabled&&notifications==0,"late manual settings read cannot publish old target after transition");
+        }
+        byte[] keys=Snapshot(Fixture()).Keys;string mapping="MAPPING_JSON "+new JavaScriptSerializer().Serialize(G9MappingSnapshot.FromKeymap(1,keys));
+        using(var release=new System.Threading.ManualResetEventSlim())
+        using(var editor=new G9ButtonEditor(delegate(string command){release.Wait(5000);return mapping;},delegate{})) {
+            Task pending=(Task)typeof(G9ButtonEditor).GetMethod("LoadMapping",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(editor,null);
+            editor.SuspendDevice();release.Set();await pending;
+            Check(Field<G9MappingSnapshot>(editor,"snapshot")==null&&!Field<Button>(editor,"apply").Enabled,"late manual mapping read cannot publish old target after transition");
+        }
+    }
     [STAThread] static int Main(string[] args) {
         try {
             if(args.Length==2 && args[0]=="--readback") {
                 var state=G9SettingsSnapshot.Parse(File.ReadAllText(args[1]),false);
                 Console.WriteLine("Validated saved physical settings response: profile="+state.profile+", fields="+state.fields.Length+", debounce="+state.fields.First(f=>f.id=="debounce.ms").value+"ms. No USB commands sent by this parser.");return 0;
             }
-            Application.EnableVisualStyles();Parsing();Preflight();Exception failure=null;
+            Application.EnableVisualStyles();Parsing();Preflight();StartupReadback();Exception failure=null;
             using(var host=new Form {Width=1100,Height=760,ShowInTaskbar=false,Opacity=0})
             using(var watchdog=new Timer {Interval=20000}) {
                 watchdog.Tick+=delegate {failure=new TimeoutException("Settings editor UI fixture did not complete.");host.Close();};
-                host.Shown+=async delegate {try{await Interface(host);}catch(Exception error){failure=error;}finally{watchdog.Stop();host.Close();}};
+                host.Shown+=async delegate {try{await DelayedTransitionReadback();await Interface(host);}catch(Exception error){failure=error;}finally{watchdog.Stop();host.Close();}};
                 watchdog.Start();Application.Run(host);
             }
             if(failure!=null)throw failure;

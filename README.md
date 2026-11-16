@@ -3,12 +3,28 @@
 An independent Windows application for the **FURYCUBE G9 PRO** mouse: onboard
 button assignments, DPI, sensor and power settings, portable profiles, a local
 macro editor, and an OLED layout editor with images and useful widgets.
-Written in C# using Windows HID and the built-in .NET Framework.
+The interface uses Vue 3 and TypeScript, embedded in a Windows WebView2 window.
+The C# backend uses Windows HID and the built-in .NET Framework.
 
-**Experimental, unofficial project.** The desktop editor and configuration
-client work; the firmware changes have passed offline checks but have **not
-been installed or validated on the development mouse**. The application does
-not flash firmware automatically.
+![English OLED layout editor in FURYCUBE G9 PRO HUB](docs/images/hub-vue-en.png)
+
+*English interface preview in the browser editor, without a connected device.
+The image shows the UI; it is not evidence of a physical OLED upload.*
+
+**Experimental, unofficial project.** On the development mouse, the current
+OL4 firmware displays custom frames and live widgets while ordinary mouse input
+continues working. A timed ten-second live test confirmed simultaneous widget
+updates, cursor movement and clicks; input and the assigned OLED key still worked
+after stopping the HUB. OLED upload currently requires the USB cable. The button
+fix stores its assignment onboard and does not require the HUB to stay open;
+current mouse input and the assigned key were also confirmed over 2.4 GHz.
+
+An earlier session lost normal input and required a Windows reboot to recover.
+The persistent cause has not been fully isolated. The current 708-byte OL4
+extension includes an endpoint-readiness guard and passed the post-reboot tests
+described below on one identified unit. This is not a general recovery guarantee;
+sleep and image retention remain unverified. The application never flashes
+firmware automatically.
 
 Firmware preparation now recalculates the image header's body CRC32 and word
 length, in addition to each changed block's CRC16. Older candidates with an
@@ -23,19 +39,27 @@ qualified by a shared product name. See [hardware evidence](docs/HARDWARE-IDENTI
 
 ## Get started
 
-Windows 10/11 x64 with .NET Framework 4.x. No Visual Studio, Python, vendor HUB,
-or additional input driver is required for the normal application build.
+Windows 10/11 x64 with .NET Framework 4.x and Microsoft Edge WebView2 Runtime.
+Building the Vue application also requires Node.js 22 and npm. Visual Studio,
+Python, the vendor HUB and an additional input driver are not required.
 
 ```powershell
 git clone https://github.com/fxpw/FURYCUBE-G9-PRO-HUB.git
 cd FURYCUBE-G9-PRO-HUB
-.\build.cmd
+.\tools\build-vue-hub.cmd
 .\Run-Hub.cmd
 ```
 
-The build creates `bin/FURYCUBE-G9-PRO-HUB.exe` and `bin/G9Device.exe`, then runs
-offline checks. GitHub Actions also builds the application on Windows.
-The current interface is in Russian; this README is in English.
+This builds the Vue frontend and creates `bin/FURYCUBE-G9-PRO-HUB.exe` and
+`bin/G9Device.exe`. The first build downloads the pinned WebView2 SDK and npm
+dependencies. See [frontend development and tests](frontend/README.md).
+`build.cmd` runs the native offline checks and builds the earlier WinForms UI;
+run the Vue build afterwards to restore the Vue executable. The existing GitHub
+Actions workflow currently builds and tests that native application.
+The Vue interface supports Russian and English. Change **Settings → Interface
+language**, or use the selector at the bottom of the sidebar; the choice is saved.
+User profile/macro names, OLED artwork text and raw device/Windows diagnostics
+retain their original text. This README is in English.
 
 The manufacturer's software is optional:
 [official G9 PRO downloads](https://www.furycube.com/pages/g9-pro).
@@ -63,8 +87,11 @@ hidden by default because their physical meaning is unconfirmed.
 
 Assignments reside in the mouse and do not require the HUB to stay open.
 Selecting a macro assigns an **existing onboard slot**. The new macro editor
-authors sequences locally; device upload remains unfinished. A candidate firmware fix
-removes the OLED button's hold-gesture delay; physical validation is still pending.
+authors sequences locally; device upload remains unfinished. The NoWait firmware
+fix removes the OLED button's hold-gesture delay. Ordinary key output was
+confirmed over USB and 2.4 GHz without the HUB in the earlier button tests.
+The current guarded firmware passed both the wired and final 2.4 GHz receiver
+checks with the HUB closed.
 
 ## DPI, sensor, power, and profiles
 
@@ -124,6 +151,13 @@ the logical profile, buttons and profile record matched their initial bytes.
 Other setting types have passed offline packet/preservation checks and still
 need individual hardware validation.
 
+After the firmware experiments, supported original DPI, Angle Snap and profile
+count settings were restored and read back, together with the original button
+map while retaining the chosen OLED-key assignment. This was not a bit-exact
+restoration of the entire profile: inactive DPI slots 7/8 and opaque reserved/
+lighting bytes differ. See [restoration limits](docs/RECOVERY.md). These settings
+copies are not firmware backups.
+
 ## Local macro editor
 
 **Мышь → Макросы** provides named macros, key/button press and release steps,
@@ -133,9 +167,10 @@ it does not install a global input hook or play back input.
 
 ![Local macro editor and focused-recording controls](docs/images/macros.png)
 
-The **В мышь** button is disabled. The project currently authors portable macros,
-not verified onboard packets; physical upload/testing follows ordinary keyboard
-output validation. See [macro format and recorder](docs/MACROS.md).
+The **В мышь** button is disabled. An onboard packet encoder has offline coverage,
+but device upload and physical macro playback remain unfinished. OLED work is
+currently the priority; macro integration is deferred. See
+[macro format and recorder](docs/MACROS.md).
 
 ## OLED editor
 
@@ -150,25 +185,56 @@ The **Экран и виджеты** tab provides:
 - Presets, labels, checkboxes, portable JSON projects with image assets, autosave,
   and PNG/packed-frame export.
 
+Two portable examples are included:
+
+- [`clock-system.g9screen.json`](examples/screens/clock-system.g9screen.json):
+  clock, battery, CPU and RAM.
+- [`positioned-image.g9screen.json`](examples/screens/positioned-image.g9screen.json):
+  an image sized 84 × 20 at X=18, Y=4, with its bundled image asset.
+
+Open either with **Открыть проект…**, or choose your own image with
+**Выбрать картинку…**. Adjust position and size, then click **На OLED**.
+Enable **Обновлять OLED каждую секунду** for live clocks and system metrics.
+
 The canvas is **120 × 28 monochrome pixels**. CPU and RAM use Windows APIs.
 NVIDIA metrics use NVML from an existing driver installation. CPU temperature
 can use an already running local sensor source; no sensor driver is installed.
 Battery and DPI-level widgets listen to passive mouse input reports. Missing or
 expired values show a dash. `DPI#` is the last reported level number (1–8),
-**not** numeric DPI. The separate numeric widget uses an OL3 snapshot of the
+**not** numeric DPI. The separate numeric widget uses an OL3/OL4 snapshot of the
 configured value used by the stock OLED, with a maximum host age of one second.
-OL3 has passed offline checks; it has not been installed or tested on the mouse.
+OL4's separate 64-byte status format has been physically read with a valid CRC.
 Stock and OL2 leave the numeric widget unavailable.
+The numeric-DPI widget was also confirmed in a physical GUI run, with continuing
+updates and normal mouse movement/clicks. Clock, battery, CPU and RAM were
+confirmed in the preceding live layout.
 Profile notifications invalidate the cached level; lost notifications prevent
 using a stored table as a reliable live numeric-DPI source. The saved DPI frame
 format is decoded separately and is never presented as a fresh device readback.
 After disconnecting the telemetry source, restart the HUB to connect it again.
 GIF import currently uses one frame.
 
-**Physical OLED upload requires the experimental OL2 or OL3 firmware extension.**
-Stock firmware does not advertise it. The host checks capabilities before writing
-a frame. Physical orientation and retention remain unverified. Stock redraws
-can overwrite a custom image, and stock sleep/off code explicitly clears it.
+**Physical OLED upload requires OL4 and the USB cable.** Stock firmware does not
+advertise it. Native OL2/OL3 image writes are blocked after their long-packet
+failure was reproduced. OL4 sends twelve bounded 64-byte reports per frame and
+preserves mouse-endpoint readiness for custom display traffic. See the
+[protocol and investigation](docs/OLED-USB-CHUNKS.md).
+
+Current post-reboot checks passed for normal input after one chunk, a complete
+initialized frame, opening the HUB, a timed ten-second live stream, and stopping
+that stream. The owner confirmed the full frame and simultaneous input/widgets.
+Passive G9 capture independently recorded 843 movements and two left clicks
+during the live interval; right-click confirmation in that interval was the
+owner's observation, not an increased capture counter. This is a short test on
+one mouse, not a long-duration qualification. The owner also confirmed the
+positioned PNG at 84 × 20 / (18,4), with working cursor and clicks afterwards.
+Current movement, left/right clicks and the assigned key were also confirmed
+over the 2.4 GHz receiver, with passive input events corroborating the test.
+
+After changing from the cable to 2.4 GHz, the owner saw the stock screen instead
+of the custom PNG. That observation does not isolate the exact reset trigger.
+Cross-mode image retention is therefore unsupported. Stock redraws can overwrite
+a custom image, and stock sleep/off code clears it.
 Persistent image storage and exclusive display ownership are not implemented.
 Live PC widgets require the HUB to keep
 running and sending updates. Enable **Обновлять OLED каждую секунду** for live
@@ -176,9 +242,10 @@ updates; the helper reuses one verified connection and initializes only the firs
 frame. An error stops updates without automatic retries. Live updates are off
 after every application launch. A desktop preview does not prove OLED support.
 
-OL3 status is requested only for an explicit upload/live update that renders a
+OL3/OL4 status is requested only for an explicit upload/live update that renders a
 numeric DPI widget. It does not combine passive profile events with saved tables.
-Invalid/busy/expired replies show a dash; an OL2 session can still send pixels.
+Invalid/busy/expired replies show a dash. OL3 status reads remain supported, but
+only OL4 can authorize native image writes.
 The normal A0 request wakes the mouse/display and updates inactivity timers.
 The custom status path skips profile preload/reload and does not write NVM.
 
@@ -189,6 +256,14 @@ OLED-protocol, and firmware-builder checks. Tests use captured fixtures and fake
 transports; these are kept separate from real-device results. Firmware integration
 checks requiring a proprietary local input are explicitly skipped when that
 input is absent, including in public CI.
+
+The last recorded full local build passed **10,961 C# checks** and **41 Python unittest
+tests**. The firmware regressions also passed **800 forced interrupt-boundary
+cases** for the discovery correction and **53 endpoint-readiness/FIFO cases**.
+The current OL4 builder passed 44 checks. The macro encoder's 763 checks and the
+updated GUI build passed; physical macro playback remains deferred.
+The newer GS4 worker correction passed 175 fake-worker checks; its final full
+build total and publication CI have not yet been recorded here.
 
 | Source | Purpose |
 |---|---|
@@ -202,9 +277,10 @@ input is absent, including in public CI.
 | `src/G9Screen.cs`, `src/G9ScreenEditor.cs` | Rendering, image layers, widgets, and projects |
 | `src/G9Sensors.cs` | Optional system metrics without installing drivers |
 | `src/G9Telemetry.cs`, `src/G9TelemetryReader.cs` | Passive mouse battery and DPI-level input |
-| `src/G9Oled.cs`, `src/G9OledRuntimeStatus.cs` | OL2/OL3 capabilities, frames and fresh numeric status |
+| `src/G9Oled.cs`, `src/G9OledRuntimeStatus.cs` | OL4 short frames, capability checks and fresh numeric status |
 | `src/G9FirmwareOledPatch.cs`, `firmware/g9_oled.S` | Offline firmware builder and own ARM extension |
 | `src/G9FirmwareOl3Patch.cs`, `firmware/g9_ol3.S` | Offline OL3 candidate, preserving the original OL2 code |
+| `src/G9FirmwareOl4Patch.cs`, `firmware/g9_ol4.S` | OL4 candidate with single-packet image chunks and short status |
 
 Useful configuration commands:
 
@@ -222,12 +298,12 @@ commands. OLED transfer is wired-only. These commands do not install firmware.
 
 Current milestones: [PLAN.md](PLAN.md).
 Firmware preparation and recovery status: [docs/FIRMWARE.md](docs/FIRMWARE.md).
-Recovery requirements before any installation: [docs/RECOVERY.md](docs/RECOVERY.md).
+Recovery evidence and the owner-authorized experiment: [docs/RECOVERY.md](docs/RECOVERY.md).
 The [minimal-sector calculation](docs/MINIMAL-UPDATE-PLAN.md) reduces a proposed
 future update's scope; it is not an installer or a verified recovery method.
 Current readback research and the offline-only archive verifier:
 [docs/RECOVERY-NEXT-STEPS.md](docs/RECOVERY-NEXT-STEPS.md). It validates supplied
-captured pages; it cannot read the mouse or clear the firmware recovery gate.
+captured pages; it cannot read the mouse or establish an independent recovery path.
 The separate [keyboard-release prototype](docs/KEYBOARD-RELEASE-PROTOTYPE.md)
 has offline coverage for configuration changes; it is not an installable image.
 Detailed research: [hardware identity](docs/HARDWARE-IDENTITY.md),

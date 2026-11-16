@@ -10,11 +10,21 @@ call tools\build-bindings-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-oled-tests.cmd
 if errorlevel 1 exit /b 1
+call tools\build-oled-short-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-oled-radio-tests.cmd
+if errorlevel 1 exit /b 1
 call tools\build-oled-status-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-oled-stream-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-oled-worker-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-startup-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-screen-background-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-web-api-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-telemetry-tests.cmd
 if errorlevel 1 exit /b 1
@@ -32,9 +42,13 @@ call tools\build-profile-library-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-macro-tests.cmd
 if errorlevel 1 exit /b 1
+call tools\build-macro-wire-tests.cmd
+if errorlevel 1 exit /b 1
 call tools\build-macro-backup-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-firmware-tests.cmd
 if errorlevel 1 exit /b 1
 call tools\build-firmware-ol3-tests.cmd
+if errorlevel 1 exit /b 1
+call tools\build-firmware-ol4-tests.cmd
 exit /b %errorlevel%

@@ -38,7 +38,9 @@ internal static class OledProtocolTests {
         Check(!caps.SupportsRuntimeStatus, "OL2 does not authorize status GET22");
         var caps3 = OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'3',false));
         Check(caps3.Extension == "OL3" && caps3.SupportsRuntimeStatus, "OL3 advertises runtime status with the same geometry");
-        Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'4',false)); }, "unknown OLED extension revision");
+        Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'4',false)).SupportsShortWrites, "OL4 advertises single-packet writes");
+        Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'5',false)).SupportsRadioWrites, "OL5 advertises the separate radio implementation");
+        Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'6',false)); }, "unknown OLED extension revision");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply, 1, 5, false)).VersionMinor == 8, "ARM version reply logical length five with complete eight-byte transfer");
         Check(BitConverter.ToString(OledProtocol.BuildDiscoveryRequest()) == "A0-0B-08-00-01-00-00-00", "stock-safe existing version query");
         Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(new byte[] { 11, 8, 1, 1, 8, 0, 0, 0 }); }, "stock firmware zeros");
@@ -82,7 +84,7 @@ internal static class OledProtocolTests {
         Reject(delegate { unsupported.Discover(); }, "stock firmware discovery"); Reject(delegate { unsupported.WriteFrame(frame); }, "stock image write");
         Check(stock.Writes.Count == 0, "stock firmware receives no SET22");
         var receiver = new FakeTransport { Pid = 0xFA60 }; Reject(delegate { new OledSender(receiver).Discover(); }, "receiver unsupported");
-        Check(receiver.Reads == 0 && receiver.Writes.Count == 0, "receiver fails before any transport call");
+        Check(receiver.Reads == 1 && receiver.Writes.Count == 0, "old receiver extension permits only known version discovery, never OLED writes");
         var bootloader = new FakeTransport { Vid = 0xA745, Pid = 0x0033 }; Reject(delegate { new OledSender(bootloader).Discover(); }, "bootloader unsupported");
         Check(bootloader.Reads == 0 && bootloader.Writes.Count == 0, "bootloader receives no OLED traffic");
         var invalid = new FakeTransport(); var invalidSender = new OledSender(invalid, delegate(int milliseconds) { }); invalidSender.Discover(); frame[479] = 0x10;
@@ -96,16 +98,23 @@ internal static class OledProtocolTests {
         var device = new FakeDeviceSession(); var adapter = new NativeOledTransport(device);
         Reject(delegate { adapter.SendFeature(packet); }, "native adapter blocks direct writes before discovery");
         Check(device.Reads == 0 && device.Writes == 0, "native adapter does not open an implicit transaction");
-        adapter.ReadFirmwareVersion(); adapter.SendFeature(packet);
-        Check(device.Reads == 1 && device.Writes == 1, "native adapter uses its original session for discovery and send");
+        adapter.ReadFirmwareVersion();
+        Reject(delegate { adapter.SendFeature(packet); }, "native adapter blocks known-broken legacy long writes");
+        Check(device.Writes == 0, "legacy marker causes zero native image writes");
+        device.Firmware[7] = (byte)'4'; adapter.ReadFirmwareVersion();
+        byte[] shortPacket = OledShortProtocol.BuildWriteChunk(0, 0, new byte[40], true);
+        adapter.SendFeature(shortPacket);
+        Check(device.Reads == 2 && device.Writes == 1, "native adapter uses its original session for discovery and send");
         device.Pid = 0xFA60; Reject(delegate { adapter.SendFeature(packet); }, "native adapter catches stale device identity");
         Check(device.Writes == 1, "identity mismatch cannot reach session Send");
         var nativeStock = new FakeDeviceSession { Firmware = new byte[] { 11, 8, 1, 1, 8, 0, 0, 0 } }; var stockAdapter = new NativeOledTransport(nativeStock);
         Reject(delegate { stockAdapter.ReadFirmwareVersion(); }, "native stock capabilities unsupported");
         Reject(delegate { stockAdapter.SendFeature(packet); }, "native stock cannot send SET22");
         Check(nativeStock.Reads == 1 && nativeStock.Writes == 0, "stock native adapter has zero image writes");
-        var invalidPageDevice = new FakeDeviceSession(); var validatingAdapter = new NativeOledTransport(invalidPageDevice); validatingAdapter.ReadFirmwareVersion();
-        Reject(delegate { validatingAdapter.SendFeature(Modified(packet, 130, (byte)(packet[130] ^ 1), false)); }, "native adapter validates page CRC before session Send");
+        var invalidPageDevice = new FakeDeviceSession(); invalidPageDevice.Firmware[7] = (byte)'4';
+        var validatingAdapter = new NativeOledTransport(invalidPageDevice); validatingAdapter.ReadFirmwareVersion();
+        byte[] badShort = (byte[])shortPacket.Clone(); badShort[62] ^= 1;
+        Reject(delegate { validatingAdapter.SendFeature(badShort); }, "native adapter validates chunk CRC before session Send");
         Check(invalidPageDevice.Writes == 0, "bad native frame never reaches the handle");
         Console.WriteLine("PASS " + count + " v2 capability-gate, geometry, CRC, pacing and fault fixtures; fake transport only."); return 0;
     } catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; } }

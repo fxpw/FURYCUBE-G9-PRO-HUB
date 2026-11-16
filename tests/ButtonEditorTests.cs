@@ -93,5 +93,31 @@ internal static class ButtonEditorTests {
         }
     }
     static KeyboardUsage SelectedKey(G9ButtonEditor editor){return (KeyboardUsage)typeof(G9ButtonEditor).GetMethod("SelectedKey",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(editor,null);}
-    [STAThread] static int Main(){try{Parsing();SelectionRegression();Console.WriteLine("PASS "+count+" button-editor snapshot and selection checks; no HID/device APIs called.");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+    static void StartupReadback() {
+        byte[] original=Bytes(Captured);var source=G9MappingSnapshot.FromKeymap(1,original);
+        Check(Hex(source.Keys)==Captured,"startup full-settings keymap preserves every slot");original[14]=0;
+        Check(source.Keys[14]==0x27,"startup mapping is independent of source mutable array");
+        Reject(delegate{G9MappingSnapshot.FromKeymap(2,source.Keys);},"startup cannot mismatch full-settings profile");
+        byte[] corrupt=(byte[])source.Keys.Clone();corrupt[58]^=1;
+        Reject(delegate{G9MappingSnapshot.FromKeymap(1,corrupt);},"startup validates full keymap checksum");
+        int calls=0;Func<string,string> noDevice=delegate(string command){calls++;throw new Exception("No device call allowed");};
+        using(var editor=new G9ButtonEditor(noDevice,delegate{})) {
+            Check(editor.AcceptStartupSnapshot(source),"startup populates empty assignment editor");
+            Check(Field<G9MappingSnapshot>(editor,"snapshot").Keys[14]==0x27,"startup displays actual assigned key");
+            Field<CheckBox[]>(editor,"modifiers")[0].Checked=true;
+            Check(!editor.AcceptStartupSnapshot(source)&&Field<CheckBox[]>(editor,"modifiers")[0].Checked,"late startup completion cannot erase an open assignment draft");
+            editor.SuspendDevice();Check(Field<CheckBox[]>(editor,"modifiers")[0].Checked&&!Field<Button>(editor,"apply").Enabled,"device transition preserves assignment draft but prevents stale write");
+            editor.InvalidateProfile();Check(!editor.AcceptStartupSnapshot(source),"profile invalidation cannot be undone by old startup snapshot");
+        }
+        using(var editor=new G9ButtonEditor(noDevice,delegate{})) {
+            Check(editor.AcceptStartupSnapshot(source),"fresh assignment snapshot accepted before transition");editor.SuspendDevice();
+            Check(editor.AcceptStartupSnapshot(source),"untouched assignments can receive the new qualified target snapshot");
+        }
+        using(var editor=new G9ButtonEditor(noDevice,delegate{})) {
+            Field<CheckBox[]>(editor,"modifiers")[0].Checked=true;
+            Check(!editor.AcceptStartupSnapshot(source)&&Field<G9MappingSnapshot>(editor,"snapshot")==null,"editing before async startup completes preserves user selection");
+        }
+        Check(calls==0,"startup snapshot delivery never performs device operations");
+    }
+    [STAThread] static int Main(){try{Parsing();SelectionRegression();StartupReadback();Console.WriteLine("PASS "+count+" button-editor snapshot and selection checks; no HID/device APIs called.");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
 }

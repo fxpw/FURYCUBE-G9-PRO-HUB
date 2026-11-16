@@ -38,7 +38,7 @@ class G9ZeroProbe : Form {
   Text="G9 PRO — обычная 0: проверка";Width=1050;Height=510;StartPosition=FormStartPosition.CenterScreen;
   log=new StreamWriter(path,false,new UTF8Encoding(false));log.AutoFlush=true;
   var instructions=new Label{Dock=DockStyle.Top,Height=110,Font=new Font("Segoe UI",11),Text="1. В поле ниже нажми обычную 0 на клавиатуре один раз.\n2. Коротко нажми шестую кнопку с экраном три раза. Не удерживай.\n3. Один раз нажми колёсико (временно назначена 0 для сравнения).\n4. Один раз нажми обычную левую кнопку мыши."};
-  if(traceReady==null)instructions.Text="1. В поле ниже нажми обычную 0 на клавиатуре один раз.\n2. Коротко нажми кнопку-экран отдельно.\n3. Зажми ПРАВУЮ кнопку мыши и, не отпуская её, коротко нажми кнопку-экран дважды.\n4. Отпусти правую кнопку. Колёсику возвращено обычное действие.";
+  if(traceReady==null)instructions.Text="1. В поле ниже нажми обычную 0 на клавиатуре один раз.\n2. Коротко нажми кнопку-экран пять раз, каждый раз отпуская её.\n3. Другие кнопки при этом не удерживай.\n4. Проверка только наблюдает ввод: она не выполняет макросы и не переназначает кнопки.";
   Controls.Add(output);Controls.Add(field);Controls.Add(status);if(traceReady!=null)Controls.Add(start);Controls.Add(instructions);
   if(traceReady!=null){field.Enabled=false;start.Click+=delegate{File.WriteAllText(traceArm,"ARM");traceRequested=true;start.Enabled=false;start.Text="Запускаю USB-проверку…";Note("USB TEST START REQUESTED");};
    traceTimer.Tick+=delegate{try{if(!File.Exists(traceReady))return;string state=File.ReadAllText(traceReady);

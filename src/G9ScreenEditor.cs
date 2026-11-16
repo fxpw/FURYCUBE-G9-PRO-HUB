@@ -9,11 +9,13 @@ using Furycube.G9.Screen;
 using Furycube.G9.Sensors;
 using Furycube.G9.Oled;
 
-internal sealed class G9ScreenEditor : UserControl {
+internal sealed partial class G9ScreenEditor : UserControl {
+    Exception lastUploadError;
     ScreenProject project=new ScreenProject();
     MonoFrame current;
     readonly SensorProvider sensors=new SensorProvider();
-    readonly G9TelemetryReader telemetry=new G9TelemetryReader();
+    G9TelemetryReader telemetry=new G9TelemetryReader();
+    readonly bool backgroundServicesEnabled;
     SensorSnapshot snapshot;
     readonly PictureBox preview=new PictureBox {BackColor=Color.FromArgb(18,23,30),SizeMode=PictureBoxSizeMode.CenterImage,Dock=DockStyle.Fill};
     readonly Label info=new Label {Dock=DockStyle.Bottom,Height=44,ForeColor=Color.DimGray,Padding=new Padding(0,5,0,0)};
@@ -48,7 +50,9 @@ internal sealed class G9ScreenEditor : UserControl {
     Button upload;
     readonly CheckBox live=new CheckBox {Text="Обновлять OLED каждую секунду",AutoSize=true};
     bool uploading;
-    string oledNote="Передача требует прошивки OL2. Штатная прошивка будет проверена до отправки кадра; установка прошивки здесь не выполняется.";
+    bool transportAvailable=true;
+    int transportEpoch,uploadSerial;
+    string oledNote="Картинки и виджеты передаются по USB с прошивкой OL4. Совместимость проверяется перед отправкой. Живые данные обновляются, пока HUB открыт.";
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
     readonly TabControl editingTabs=new TabControl {Dock=DockStyle.Fill};
     readonly string autosaveFile;
@@ -74,12 +78,13 @@ internal sealed class G9ScreenEditor : UserControl {
         internal GeometrySlider(string value){title=value;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
         internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+" px";}
     }
-    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null){
+    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true){
         report=logger;sendFrame=frameSender;readRuntimeStatus=runtimeStatusReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
-        autosaveFile=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
+        backgroundServicesEnabled=backgroundServices;
+        autosaveFile=savedEditorFile??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
         BuildLayout();BindEvents();bool restored=RestoreAutosave();
         syncing=true;try{preset.SelectedIndex=restored?-1:0;}finally{syncing=false;}
-        SyncControls(null,false);Render();timer.Start();telemetry.Start();
+        SyncControls(null,false);Render();if(backgroundServices){timer.Start();telemetry.Start();}
         Disposed+=delegate{if(disposedEditor)return;disposedEditor=true;timer.Stop();autosaveTimer.Stop();SaveAutosave();timer.Dispose();autosaveTimer.Dispose();tips.Dispose();telemetry.Dispose();sensors.Dispose();if(preview.Image!=null)preview.Image.Dispose();};
     }
     void BuildLayout(){
@@ -95,8 +100,8 @@ internal sealed class G9ScreenEditor : UserControl {
         AddButton(second,"Выбрать картинку…",ChooseImage,"PNG, JPG, BMP, GIF или TIFF. Картинку можно двигать и изменять в размерах.");
         AddButton(second,"Экспорт PNG",ExportPng,"Сохранить чёрно-белый кадр без оранжевой рамки выделения.");
         AddButton(second,"Экспорт .bin",ExportFrame,"Сохранить упакованный кадр для дальнейшей работы с устройством.");
-        upload=AddButton(second,"На OLED",async delegate{await UploadFrame();},"Проверить поддержку OL2 и передать текущий кадр по кабелю. На штатной прошивке запись будет отклонена. Прошивка мыши не меняется.");upload.Enabled=sendFrame!=null;
-        var third=Flow();third.Controls.Add(live);live.Enabled=sendFrame!=null;tips.SetToolTip(live,"Для живых часов и показателей ПК. HUB должен работать. При ошибке обновление выключается; после запуска программы само не включается.");
+        upload=AddButton(second,"На OLED",async delegate{await UploadFrame();},"Проверить поддержку OL4 и передать текущий кадр по USB. Для автоматического обновления включи живой режим.");upload.Enabled=sendFrame!=null;
+        var third=Flow();third.Controls.Add(live);live.Enabled=sendFrame!=null;tips.SetToolTip(live,"Для живых часов и показателей ПК. HUB должен работать. При ошибке обновление выключается. Возобновление при запуске включается отдельной настройкой HUB.");
         toolbar.Controls.Add(first);toolbar.Controls.Add(second);toolbar.Controls.Add(third);
         var split=new SplitContainer {Size=new Size(1040,440),Dock=DockStyle.Fill,Orientation=Orientation.Vertical,Panel1MinSize=300,Panel2MinSize=300,SplitterDistance=670,FixedPanel=FixedPanel.Panel2};
         var left=new Panel {Dock=DockStyle.Fill};
@@ -267,22 +272,57 @@ internal sealed class G9ScreenEditor : UserControl {
         }catch(Exception e){current=null;info.Text="Не удалось отрисовать: "+e.Message;}
     }
     async Task UploadFrame(bool quiet=false){
-        if(uploading||sendFrame==null)return;Render();if(current==null)return;
+        if(uploading||sendFrame==null||!transportAvailable)return;Render();if(current==null)return;
+        int epoch=transportEpoch,operation=++uploadSerial;
         if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";Render();return;}
-        uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
+        lastUploadError=null;uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
         try{
             // STATUS is requested only by an explicit upload/live tick which
             // actually renders numeric DPI. Preview/sensors never query it.
-            if(UsesNumericDpi()&&readRuntimeStatus!=null)runtimeStatus=await readRuntimeStatus();
-            if(IsDisposed||disposedEditor)return;
+            if(UsesNumericDpi()&&readRuntimeStatus!=null) {
+                var received=await readRuntimeStatus();
+                if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;runtimeStatus=received;
+            }
+            if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;
             if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";return;}
             Render();if(current==null){live.Checked=false;return;}
             byte[] pixels=(byte[])current.Buffer.Clone();
-            oledNote=await sendFrame(pixels);if(IsDisposed||disposedEditor)return;
+            string sent=await sendFrame(pixels);if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;oledNote=sent;
             if(live.Checked)oledNote+=" Автообновление включено; HUB должен работать.";if(!quiet)Log(oledNote);
         }
-        catch(Exception error){runtimeStatus=null;if(!IsDisposed&&!disposedEditor){live.Checked=false;oledNote="Передача остановлена: "+error.Message;Log(oledNote);}}
-        finally{uploading=false;if(!IsDisposed&&!disposedEditor){upload.Enabled=true;Render();}}
+        catch(Exception error){if(epoch==transportEpoch&&!IsDisposed&&!disposedEditor){lastUploadError=error;runtimeStatus=null;live.Checked=false;oledNote="Передача остановлена: "+error.Message;Log(oledNote);}}
+        finally{if(operation==uploadSerial){uploading=false;if(!IsDisposed&&!disposedEditor){upload.Enabled=transportAvailable;Render();}}}
+    }
+    internal bool IsLive {get {return live.Checked;}}
+    internal string CaptureProjectJson() {
+        var json=new JavaScriptSerializer();var copy=json.Deserialize<ScreenProject>(json.Serialize(project));copy.ImageFile=project.ResolveImagePath();return json.Serialize(copy);
+    }
+    internal void AcceptProjectJson(string json) {
+        if(String.IsNullOrEmpty(json)||json.Length>1048576)throw new InvalidDataException("Неверный размер макета.");
+        var value=new JavaScriptSerializer().Deserialize<ScreenProject>(json);if(value==null)throw new InvalidDataException("Отсутствует макет.");value.Validate();
+        // The web editor may reposition an approved local image, but choosing
+        // a different file requires the host's native file dialog.
+        if(!String.IsNullOrEmpty(value.ImageFile) && !String.Equals(value.ResolveImagePath(),project.ResolveImagePath(),StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Выберите картинку через диалог открытия файла.");
+        project=value;SyncControls(null,false);Changed();
+    }
+    internal string PreviewPngDataUrl() {
+        Render();if(current==null)return null;
+        using(var bitmap=current.ToBitmap())using(var stream=new MemoryStream()) {bitmap.Save(stream,System.Drawing.Imaging.ImageFormat.Png);return "data:image/png;base64,"+Convert.ToBase64String(stream.ToArray());}
+    }
+    internal object BackgroundState() {return new {live=live.Checked,available=transportAvailable,uploading=uploading,status=oledNote};}
+    internal Task UploadCurrent() {return UploadFrame();}
+    internal void StopLive() {live.Checked=false;transportEpoch++;uploadSerial++;uploading=false;upload.Enabled=transportAvailable;oledNote="Автообновление OLED приостановлено.";Render();}
+    internal bool SuspendDevice(string reason) {
+        bool wasLive=live.Checked;transportEpoch++;uploadSerial++;uploading=false;runtimeStatus=null;
+        telemetry.Dispose();telemetry=new G9TelemetryReader();
+        transportAvailable=false;live.Checked=false;live.Enabled=false;upload.Enabled=false;
+        oledNote=reason;Render();return wasLive;
+    }
+    internal void AllowDevice() {if(IsDisposed||disposedEditor)return;if(backgroundServicesEnabled)telemetry.Start();transportAvailable=true;live.Enabled=upload.Enabled=sendFrame!=null;}
+    internal async Task ResumeLive() {
+        if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null)return;
+        bool previous=syncing;syncing=true;try {live.Checked=true;}finally {syncing=previous;}
+        await UploadFrame();
     }
     void ChooseImage(){using(var dialog=new OpenFileDialog {Filter="Картинки|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff"})if(dialog.ShowDialog(this)==DialogResult.OK){project.ImageFile=dialog.FileName;if(project.Composition==CompositionMode.Widgets)project.Composition=project.Widgets.Count>0?CompositionMode.ImageAndWidgets:CompositionMode.Image;SyncControls(null,true);Changed();}}
     void SaveProject(){using(var dialog=new SaveFileDialog {Filter="Проект экрана|*.g9screen.json",FileName="screen.g9screen.json"})if(dialog.ShowDialog(this)==DialogResult.OK)try{ScreenWidget w=SelectedWidget();bool image=ImageSelected();project.Save(dialog.FileName);SyncControls(w,image);Log("Сохранён проект экрана: "+dialog.FileName);dirty=true;SaveAutosave();}catch(Exception e){MessageBox.Show(this,e.Message,"Сохранение проекта",MessageBoxButtons.OK,MessageBoxIcon.Error);}}

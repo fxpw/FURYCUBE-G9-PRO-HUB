@@ -12,6 +12,10 @@ internal static class OledWorkerTests {
     const string ValidStatus="IoRHUwMBAgOADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADcn";
     const string InvalidStatus="IoRHUwMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOyn";
     const string BusyStatus="IoRHUwMCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKPc";
+    // Python binascii.crc_hqx(...,0xffff), 64-byte GS4 fixtures.
+    const string ShortValidStatus="IkBHUwQBAgOADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADJ8Q==";
+    const string ShortInvalidStatus="IkBHUwQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAChOA==";
+    const string ShortBusyStatus="IkBHUwQCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABKFw==";
     static void Check(bool value,string message){if(!value)throw new Exception("FAIL "+message);count++;}
     static void Reject(Action action,string message){try{action();}catch(Exception){count++;return;}throw new Exception("FAIL accepted "+message);}
     static G9OledWorker Worker(string mode,int timeout,Action<string> logger,string ackFile=null){
@@ -21,14 +25,32 @@ internal static class OledWorkerTests {
     }
     static void Emit(string line){Console.WriteLine(line);Console.Out.Flush();}
     static void ChildStatus(string mode,int index){
+        bool shortStatus=mode.StartsWith("short-",StringComparison.Ordinal);
+        if(shortStatus)mode=mode.Substring(6);
         if(mode=="status-hang")Thread.Sleep(Timeout.Infinite);
         if(mode=="status-ack-only"){Emit("OLED_STATUS_SENT "+index);return;}
-        string payload=mode=="status-changing"?(index==2?BusyStatus:index==3?InvalidStatus:ValidStatus):ValidStatus;
+        string valid=shortStatus?ShortValidStatus:ValidStatus,busy=shortStatus?ShortBusyStatus:BusyStatus,invalid=shortStatus?ShortInvalidStatus:InvalidStatus;
+        string payload=mode=="status-changing"?(index==2?busy:index==3?invalid:valid):valid;
         bool unsupported=mode=="ol2"||(mode=="status-changing"&&index==4)||mode=="status-unsupported-no-ack";
         if(!unsupported)Emit("RUNTIME_QUERY len=8");
         if(mode=="status-bad-base64")payload="!"+payload.Substring(1);
         if(mode=="status-bad-length")payload=payload.Substring(4);
         if(mode=="status-bad-crc"){byte[] data=Convert.FromBase64String(payload);data[8]^=1;payload=Convert.ToBase64String(data);}
+        if(mode=="status-bad-version"||mode=="status-bad-declared-length"||mode=="status-bad-padding"){
+            byte[] data=Convert.FromBase64String(payload);
+            if(mode=="status-bad-version")data[4]=data.Length==64?(byte)3:(byte)4;
+            else if(mode=="status-bad-declared-length")data[1]=data.Length==64?(byte)132:(byte)64;
+            else data[10]=1;
+            ushort crc=OledProtocol.Crc16CcittFalse(data,0,data.Length-2);data[data.Length-2]=(byte)crc;data[data.Length-1]=(byte)(crc>>8);
+            payload=Convert.ToBase64String(data);
+        }
+        if(mode=="status-wrong-decoded-length"){
+            byte[] data=Convert.FromBase64String(payload),longer=new byte[data.Length+1];Buffer.BlockCopy(data,0,longer,0,data.Length);payload=Convert.ToBase64String(longer);
+        }
+        if(mode=="status-noncanonical"){
+            const string alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            char[] encoded=payload.ToCharArray();int at=encoded.Length-3;encoded[at]=alphabet[alphabet.IndexOf(encoded[at])|1];payload=new string(encoded);
+        }
         string dataLine=unsupported?"OLED_STATUS_UNSUPPORTED":"OLED_STATUS_DATA "+payload;
         Emit(dataLine);
         if(mode=="status-data-twice")Emit(dataLine);
@@ -48,6 +70,7 @@ internal static class OledWorkerTests {
         Console.WriteLine("FAKE_HELPER_NO_USB");Console.WriteLine("OLED_STREAM_READY");Console.Out.Flush();
         if(mode=="stderr"){Console.Error.WriteLine("ERROR fake failure");Console.Error.Flush();Thread.Sleep(10000);return 1;}
         if(mode=="status-unsolicited"){Emit("OLED_STATUS_DATA "+ValidStatus);Thread.Sleep(Timeout.Infinite);}
+        if(mode=="short-status-unsolicited"){Emit("OLED_STATUS_DATA "+ShortValidStatus);Thread.Sleep(Timeout.Infinite);}
         using(var input=OledStreaming.OpenUtf8Input(Console.OpenStandardInput())){
         int index=0,status=0;for(;;){string line=input.ReadLine();if(line==null)return mode=="normal"?3:0;if(line=="STOP")return 0;
             if(line=="STATUS"){ChildStatus(mode,++status);continue;}
@@ -59,6 +82,49 @@ internal static class OledWorkerTests {
         }
     }
     static bool Dead(int pid){try{using(var p=Process.GetProcessById(pid))return p.HasExited;}catch(ArgumentException){return true;}}
+    static void CheckShortStatus(byte[] frame){
+        using(var worker=Worker("short-normal",3000,null)){
+            worker.Send(frame);OledRuntimeStatus first=worker.ReadRuntimeStatus();worker.Send(frame);OledRuntimeStatus second=worker.ReadRuntimeStatus();
+            Check(first!=null&&first.IsValid&&first.ProfileId==2&&first.Stage==3&&first.ConfiguredDpi==3200,"OL4 64-byte GS4 crosses the real child-process pipe");
+            Check(second!=null&&!Object.ReferenceEquals(first,second)&&second.ReceivedAtUtc>=first.ReceivedAtUtc,"repeated GS4 queries publish separate fresh receipt objects");
+            Check(!first.IsFresh(first.ReceivedAtUtc.AddMilliseconds(1001)),"GS4 expires after the one-second maximum age");
+            Check(worker.FramesSubmitted==2&&worker.StatusQueriesSubmitted==2,"GS4 status/frame interleaving preserves separate acknowledgements");
+        }
+        using(var worker=Worker("short-status-changing",3000,null)){
+            Check(worker.ReadRuntimeStatus().ConfiguredDpi==3200,"GS4 changing fixture begins with valid numeric DPI");
+            OledRuntimeStatus busy=worker.ReadRuntimeStatus();Check(busy!=null&&busy.IsBusy&&!busy.IsValid&&!busy.ConfiguredDpi.HasValue,"GS4 busy clears the earlier numeric value");
+            OledRuntimeStatus invalid=worker.ReadRuntimeStatus();Check(invalid!=null&&!invalid.IsBusy&&!invalid.IsValid&&!invalid.ProfileId.HasValue&&!invalid.Stage.HasValue&&!invalid.ConfiguredDpi.HasValue,"GS4 invalid clears every previous numeric field");
+            Check(worker.ReadRuntimeStatus()==null,"GS4 unsupported replaces earlier data only after ACK");worker.Send(frame);
+            Check(worker.FramesSubmitted==1&&worker.StatusQueriesSubmitted==4,"GS4 nonvalid responses remain usable for later frame output");
+        }
+        foreach(string fault in new[]{"status-bad-crc","status-bad-version","status-bad-declared-length","status-bad-padding","status-bad-base64","status-bad-length","status-wrong-decoded-length","status-noncanonical","status-data-twice","status-ack-only","status-frame-ack","status-bad-ack"}){
+            string mode="short-"+fault;int pid;
+            using(var worker=Worker(mode,2000,null)){
+                pid=worker.ProcessId;Reject(delegate{worker.ReadRuntimeStatus();},mode+" rejected");int submitted=worker.StatusQueriesSubmitted;
+                Reject(delegate{worker.ReadRuntimeStatus();},mode+" cannot retry the failed query");Reject(delegate{worker.Send(frame);},mode+" cannot send a later frame");
+                Check(worker.StatusQueriesSubmitted==submitted&&worker.FramesSubmitted==0,"GS4 failure sends no follow-up command");
+            }Check(Dead(pid),mode+" helper terminated");
+        }
+        using(var worker=Worker("short-status-unsolicited",2000,null)){
+            Check(SpinWait.SpinUntil(()=>worker.IsStopped,2500),"unsolicited GS4 poisons the session");Reject(delegate{worker.ReadRuntimeStatus();},"unsolicited GS4 cannot satisfy a later query");
+        }
+        using(var worker=Worker("short-status-replay",2000,null)){
+            try{worker.ReadRuntimeStatus();}catch(InvalidOperationException){}catch(IOException){}
+            Check(SpinWait.SpinUntil(()=>worker.IsStopped,2500),"GS4 DATA replay after ACK poisons the session");Reject(delegate{worker.ReadRuntimeStatus();},"replayed GS4 cannot be reused");
+        }
+        string ackFile=Path.Combine(Path.GetTempPath(),"g9-fake-short-status-"+Guid.NewGuid().ToString("N")+".tmp");
+        using(var dataSeen=new ManualResetEvent(false))try{
+            using(var worker=Worker("short-status-gated",5000,delegate(string line){if(line=="FAKE_STATUS_DATA_SENT")dataSeen.Set();},ackFile)){
+                Task<OledRuntimeStatus> query=Task.Run(()=>worker.ReadRuntimeStatus());Check(dataSeen.WaitOne(3000),"GS4 DATA received before gated ACK");
+                Check(!query.IsCompleted,"GS4 DATA alone does not complete the query");Thread.Sleep(1100);
+                DateTimeOffset beforeAck=DateTimeOffset.UtcNow;File.WriteAllText(ackFile,"release");
+                Check(query.Wait(3000)&&query.Result.IsValid&&query.Result.ReceivedAtUtc<=beforeAck&&!query.Result.IsFresh(DateTimeOffset.UtcNow),"late GS4 ACK does not refresh already expired DATA");
+            }
+        }finally{if(File.Exists(ackFile))File.Delete(ackFile);}
+        using(var worker=Worker("short-status-no-ack",250,null)){
+            Reject(delegate{worker.ReadRuntimeStatus();},"GS4 without ACK times out");Check(worker.IsStopped,"unacknowledged GS4 helper terminates");
+        }
+    }
     static void CheckStatus(byte[] frame){
         int diagnostics=0;
         using(var worker=Worker("normal",3000,delegate(string line){if(line=="RUNTIME_QUERY len=8")Interlocked.Increment(ref diagnostics);})){
@@ -155,6 +221,7 @@ internal static class OledWorkerTests {
             using(var worker=Worker("normal",3000,delegate(string text){throw new InvalidOperationException("Logger closed");})){normalPid=worker.ProcessId;worker.Send(frame);worker.Send(frame);Check(worker.FramesSubmitted==2,"two frames share one helper despite a throwing logger");}
             Check(Dead(normalPid),"Dispose terminates the normal helper");
             CheckStatus(frame);
+            CheckShortStatus(frame);
             using(var worker=Worker("delay",3000,null)){
                 Task a=Task.Run(delegate{worker.Send(frame);}),b=Task.Run(delegate{worker.Send(frame);});
                 Check(Task.WaitAll(new[]{a,b},5000)&&worker.FramesSubmitted==2,"concurrent callers are serialized without skipped acknowledgements");

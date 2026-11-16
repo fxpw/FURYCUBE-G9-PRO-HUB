@@ -1,0 +1,81 @@
+{
+  "Version": 1,
+  "Width": 120,
+  "Height": 28,
+  "CultureName": "ru-RU",
+  "ImageFile": null,
+  "ImageX": 0,
+  "ImageY": 0,
+  "ImageWidth": 0,
+  "ImageHeight": 0,
+  "ImageOptions": {
+    "Resize": 0,
+    "Threshold": 128,
+    "Dither": false,
+    "Invert": false,
+    "BackgroundLit": false
+  },
+  "Composition": 1,
+  "Widgets": [
+    {
+      "Id": "a70f5462db634a66ba08338a61c07b62",
+      "Kind": 1,
+      "X": 2,
+      "Y": 0,
+      "Width": 57,
+      "Height": 14,
+      "Text": "Text",
+      "Format": "HH:mm",
+      "FontSize": 12,
+      "Bold": true,
+      "Lit": true,
+      "ClearBackground": false,
+      "ShowLabel": false
+    },
+    {
+      "Id": "dace9c259c424b02a2cc2d176f3b274c",
+      "Kind": 2,
+      "X": 65,
+      "Y": 2,
+      "Width": 54,
+      "Height": 12,
+      "Text": "Text",
+      "Format": "HH:mm",
+      "FontSize": 9,
+      "Bold": false,
+      "Lit": true,
+      "ClearBackground": false,
+      "ShowLabel": true
+    },
+    {
+      "Id": "547a93c4b7ac42f191be955366e9c002",
+      "Kind": 4,
+      "X": 2,
+      "Y": 15,
+      "Width": 58,
+      "Height": 13,
+      "Text": "Text",
+      "Format": "HH:mm",
+      "FontSize": 9,
+      "Bold": false,
+      "Lit": true,
+      "ClearBackground": false,
+      "ShowLabel": true
+    },
+    {
+      "Id": "c39432a768054c0bae42fdabee4eef31",
+      "Kind": 5,
+      "X": 65,
+      "Y": 15,
+      "Width": 54,
+      "Height": 13,
+      "Text": "Text",
+      "Format": "HH:mm",
+      "FontSize": 9,
+      "Bold": false,
+      "Lit": true,
+      "ClearBackground": false,
+      "ShowLabel": true
+    }
+  ]
+}
