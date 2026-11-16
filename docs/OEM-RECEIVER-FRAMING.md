@@ -6,6 +6,12 @@ passed eight bytes. This is a verified API-buffer difference, but the controlled
 DG2 experiment below shows that padding alone does not repair the current
 radio configuration timeout.
 
+Later DG4 evidence narrows that finding: the actual native startup begins with
+GET06, and its exact original-library read succeeded. Its payload uses nine
+bytes, not the 64-byte envelope used by the managed client. See
+[the first-read comparison](OEM-FIRST-RADIO-READ.md). The failed version-query
+controls below remain valid but did not prove failure of every settings read.
+
 ## Reproducible offline evidence
 
 Run `tools/pyenv/bin/python tools/audit_vendor_rf_framing.py` under WSL.

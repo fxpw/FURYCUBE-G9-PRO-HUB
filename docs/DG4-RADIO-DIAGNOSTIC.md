@@ -17,8 +17,17 @@ temporarily restored class-registration bypass rebuilt only G9 without that
 filter; the fresh passive USB checklist passed 9/9. The original global
 registration was independently verified as restored.
 
-No DG4 radio prepare has been sent yet. The next step is a visible baseline
-and a separate radio input check before one ordinary request.
+After an owner-confirmed radio reset, the visible baseline was 1000 and the
+separate radio input check passed 9/9. One GET0B through the native client timed
+out before a payload read; after movement the owner still observed 1000. This
+did not visibly establish acceptance of that request. The display limits below
+still apply.
+
+A later fresh reset and 1000 baseline preceded one **stock-startup GET06**
+through the pinned original x86 HIDAPI. It succeeded: A0 became ready, GET06
+requested and returned exactly nine bytes, and `06090144bb00000000` matched
+the saved profile-1 polling record byte for byte. No settings or OLED frame was
+written. The post-query display/input confirmation is pending.
 
 DG4 supplies the native DPI renderer with:
 
@@ -81,9 +90,11 @@ the offline transfer proof do not establish installed flash integrity or a
 working recovery path. Configuration readback and physical input/display checks
 are separate evidence; they do not replace a complete flash dump either.
 
-Next: a passive radio input check and one fresh radio version request.
-Record the visible radio baseline
-before the request, then observe its result before another configuration
-operation can replace the context. A passive input check sends no such requests.
+Next: record the visible result of the successful GET06, then isolate the same
+read through the existing managed transport without preceding version/profile
+queries. Production transport has not changed. Before any diagnostic whose
+interpretation depends on request identity, record a different visible baseline
+and observe the result before another configuration operation replaces context.
+A passive input check sends no such requests.
 See [Windows input recovery](WINDOWS-INPUT-RECOVERY.md) before rebuilding the
 USB device stack on the development PC. Receiver image upload remains guarded.

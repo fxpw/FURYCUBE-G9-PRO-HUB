@@ -26,7 +26,7 @@ identified development mouse, not every device sold under the same name.
 | OL7 USB input guard | Earlier installed build. A single USB image and continued input were confirmed after Windows restart; the radio input check passed 9/9. Ordinary radio reads later timed out before an image could be sent. |
 | DG2 diagnostic control | Earlier installed without custom OLED support to compare the original radio path. Complete USB settings matched all 117 saved bytes; both USB and radio input passed 9/9. Radio version queries still timed out, including through the OEM library. See [DG1/DG2 controls](docs/DG1-DG2-CONTROLS.md). |
 | DG3 RF state display | Earlier diagnostic build: USB input recovered without a PC reboot after an approved Interception bypass and passed 9/9. Radio input also passed 9/9, but the version query timed out and the display showed 9000. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
-| DG4 last-request diagnostic | Installed. All 117 profile bytes match; the owner saw diagnostic 1128, and USB input passed 9/9 after the same approved filter recovery. A visible radio baseline is pending; no DG4 radio request has been sent yet. See [DG4 diagnostic](docs/DG4-RADIO-DIAGNOSTIC.md). |
+| DG4 last-request diagnostic | Installed; all 117 profile bytes match and USB/radio input checks passed 9/9. GET0B timed out, but a fresh stock-startup GET06 through the OEM library succeeded and exactly matched the saved polling record. This qualifies that single read, not radio OLED or all settings. See [DG4 diagnostic](docs/DG4-RADIO-DIAGNOSTIC.md). |
 | OL8 / OL9 candidates | Separate context-kind and checksum hypotheses have passed complete offline checks and exact updater packaging. Neither is installed. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
 | PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
@@ -39,8 +39,9 @@ has not been isolated. The later OL5 experiment preserves that guard and passed
 an ordinary-input and single-USB-frame check. The HUB does not install firmware
 automatically.
 
-The next hardware milestone is an ordinary working radio configuration read,
-then a visible control image. The PC-side frame cache and reconnect path are
+The next hardware milestone is repeatable radio settings through the managed
+client, then a visible control image. One stock polling read through the OEM
+library has succeeded. The PC-side frame cache and reconnect path are
 implemented, while ordinary receiver OLED remains disabled pending end-to-end
 qualification. One OL7 USB image is now physically confirmed; its radio image
 could not be tested because discovery timed out. DG2, a control image without
@@ -49,7 +50,11 @@ USB input failure was recovered by bypassing
 Interception in the G9 stack, with the original global registration restored.
 The same firmware then passed the input check without a PC reboot.
 The subsequently installed DG4 diagnostic also passed USB input after that
-recovery; its first radio request awaits a visible baseline.
+recovery and a separate radio input check. Its stock-startup polling read now
+succeeded through the OEM library; the failed version query alone did not
+establish a failure of the entire configuration channel. Production startup
+and transport changes still require a controlled comparison.
+See the [OEM startup read and live polling result](docs/OEM-FIRST-RADIO-READ.md).
 See [Windows input recovery](docs/WINDOWS-INPUT-RECOVERY.md).
 The brief screen change reported
 at startup has not been identified as host traffic or a firmware redraw.
