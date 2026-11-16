@@ -1,6 +1,6 @@
 # DG3: RF state on the mouse display
 
-Updated 2026-11-17. **Installed; USB input recovered and passed 9/9 without a
+Updated 2026-11-17. **Earlier installed build; USB input recovered and passed 9/9 without a
 PC reboot.** The native display visibly showed the expected 9000 baseline.
 DG3 is a temporary observation tool, not a radio OLED fix or a custom image
 uploader. A fresh radio input check also passed 9/9; the version query timed out
@@ -122,8 +122,9 @@ remains `[0x2B000,0x51000)`. Manufacturer binaries and generated
 packages stay private. A full installed-firmware dump and independent recovery
 remain unverified.
 
-The radio sample was 9000. DG4 is prepared offline to also expose the last
-accepted report ID through idle; it has not been installed. See
+The radio sample was 9000. DG4 also exposes the last
+accepted report ID through idle; it has since been installed and passed its
+USB input check after the same approved recovery. See
 [DG4 diagnostic](DG4-RADIO-DIAGNOSTIC.md).
 The normal HUB radio OLED guard stays enabled. Offline EP2 tests supply their
 completion callback; they do not prove that the physical endpoint or Windows

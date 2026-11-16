@@ -1,10 +1,24 @@
 # DG4: last accepted request and RF state
 
-Updated 2026-11-17. **Prepared and checked offline; not installed.** This is a
-temporary diagnostic control without custom OLED image support. DG3 remains
-installed: radio input passed 9/9, an ordinary version query timed out and the
-owner observed 9000. That DG3 idle sample cannot distinguish no reception from
-completion, abort or a stale display.
+Updated 2026-11-17. **Installed; USB input passed 9/9 after the approved
+Interception recovery, without a PC reboot.** This is a temporary diagnostic
+control without custom OLED image support. On the preceding DG3 build, radio
+input passed 9/9, an ordinary version query timed out and the owner observed
+9000. That idle sample could not distinguish no reception from completion,
+abort or a stale display.
+
+The DG4 updater completed 33/33 blocks and closed normally. A fresh USB profile
+backup matched the expected 117 bytes; only the reset screen-key assignment
+needed restoration. An independent complete profile reread then matched every
+saved byte (profile 1, 1600 DPI, 1000 Hz, screen key 0). The owner visibly saw
+1128, consistent with report 0x08/state 0, and reported missing mouse input.
+Interception had reattached to G9's USB stack. The previously authorized,
+temporarily restored class-registration bypass rebuilt only G9 without that
+filter; the fresh passive USB checklist passed 9/9. The original global
+registration was independently verified as restored.
+
+No DG4 radio prepare has been sent yet. The next step is a visible baseline
+and a separate radio input check before one ordinary request.
 
 DG4 supplies the native DPI renderer with:
 
@@ -60,8 +74,15 @@ with FF. Program: 33 pages `[0x2B00A,0x4C00A)`; erase remains
 `[0x2B000,0x51000)`. Generated packages and manufacturer binaries stay private.
 Independent full-firmware recovery remains unverified.
 
-Next: a fresh wired settings backup, reviewed installation, automatic input
-check and one fresh radio version request. Record the visible radio baseline
+Independent review also reproduced an inherited OEM updater limitation: its
+host-side success path checks response prefixes but accepts erroneous erase/
+program status bytes and an altered verify tail. Therefore 33/33 progress and
+the offline transfer proof do not establish installed flash integrity or a
+working recovery path. Configuration readback and physical input/display checks
+are separate evidence; they do not replace a complete flash dump either.
+
+Next: a passive radio input check and one fresh radio version request.
+Record the visible radio baseline
 before the request, then observe its result before another configuration
 operation can replace the context. A passive input check sends no such requests.
 See [Windows input recovery](WINDOWS-INPUT-RECOVERY.md) before rebuilding the
