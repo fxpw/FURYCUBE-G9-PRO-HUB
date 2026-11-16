@@ -82,3 +82,16 @@ HIDAPI GET agreed that the receiver was not ready. Neither observation proves
 whether the mouse received/prepared the request. No further retry, response
 drain, setting/OLED write or production transport change follows from this
 audit. The physical cause remains unknown.
+
+A later owner-confirmed reset preceded one complete version transaction through
+the pinned original x86 HIDAPI: its read/write OVERLAPPED open, native send
+(logical return value 8, padded internally), a 500 ms first-ACK delay, and
+bounded native ACK reads. It also timed out with every A0 reply not-ready.
+No version payload was consumed; the helper exited normally within its external
+six-second process limit. The attempt is recorded under
+`evidence/flash-experiment/20261116T2031390956600Z-DG2-bounded/radio-full-oem-20261116T2100351758215Z/`.
+
+Thus using the original library did not repair this instance either. This is
+not a capture of the entire OEM application's initialization or a proof of which
+device-side state failed. The next diagnostic should observe the mouse's RF
+state, rather than repeat transport-format variants.

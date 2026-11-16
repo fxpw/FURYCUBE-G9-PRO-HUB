@@ -64,7 +64,8 @@ OLED packets to these control images.
 - A separate reset preceded a version query with the OEM's 134-byte padded
   prepare format; it also timed out. One original-library A0-only observation
   agreed that the response was not ready. A complete original-library query
-  probe is prepared but not yet run. See the [API boundary audit](OEM-RECEIVER-FRAMING.md).
+  after another confirmed reset also timed out, without consuming a payload.
+  See the [API boundary audit](OEM-RECEIVER-FRAMING.md).
 
 The restored profile is profile 1, stage 2 / 1600 DPI, 1000 Hz, with ordinary
 key `0` on the screen button. Its 117-byte SHA256 is
