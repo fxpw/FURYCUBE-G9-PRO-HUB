@@ -45,6 +45,9 @@ could not be tested because discovery timed out. DG2 is now a temporary control
 image without custom OLED; it is not the final HUB firmware. The brief screen change reported
 at startup has not been identified as host traffic or a firmware redraw.
 See [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
+The [OEM receiver framing audit](docs/OEM-RECEIVER-FRAMING.md) documents the
+original library's transport and the bounded comparisons with it. Matching its
+134-byte prepare buffer alone did not resolve the current radio timeout.
 
 ## Quick input check
 
