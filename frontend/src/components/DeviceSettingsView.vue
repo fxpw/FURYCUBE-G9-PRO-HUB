@@ -167,7 +167,7 @@ async function applyGlobal(field: SettingField) {
     <p>
       {{
         t(
-          "Полный набор настроек читается и записывается по USB. Подключите кабель, чтобы редактировать DPI, сенсор и питание.",
+          "По 2.4G доступны назначения, DPI, сенсор и частота опроса. Для таймеров питания и debounce подключите USB-кабель.",
         )
       }}
     </p>
@@ -210,7 +210,11 @@ async function applyGlobal(field: SettingField) {
         class="setting-item"
         :class="{ unavailable: !field.canWrite }"
       >
-        <template v-if="field.id === 'dpi.enabledMask'"
+        <div v-if="!field.canWrite && field.value === null">
+          <strong class="field-label">{{ fieldName(field) }}</strong>
+          <span class="hint">—</span>
+        </div>
+        <template v-else-if="field.id === 'dpi.enabledMask'"
           ><span class="field-label">{{ t("Включённые уровни DPI") }}</span>
           <div class="stage-toggles">
             <label

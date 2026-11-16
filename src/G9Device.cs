@@ -15,11 +15,83 @@ using Furycube.G9.Settings;
 // Pure packet checks are shared by the executable and offline fixture tests.
 internal static class G9Wire {
     internal const int KeymapLength = 59;
+    // OL5's mouse-side RF handler alone does not qualify the USB receiver.
+    // Physical FA60 image submission stalled subsequent configuration reads.
+    // Keep normal radio settings/version reads available, but fail OLED before
+    // even discovery until an end-to-end receiver path has been qualified.
+    internal static void RequireQualifiedOledTransport(ushort product) {
+        Require(product == 0x2148, "OLED through the 2.4 GHz receiver is not qualified after a physical relay failure; connect the mouse by USB. No OLED query or frame was sent.");
+    }
     internal static byte[] ReadKeysRequest() { return ReadKeysRequest(1); }
     internal static byte[] ReadKeysRequest(int profile) { return ReadSettingsRequest(8, profile); }
     internal static void ValidateProfileNumber(int profile) { Require(profile >= 1 && profile <= 5, "G9 profile must be1..5"); }
     internal static int SettingsReadLength(byte report) {
         switch (report) { case 4:return 52; case 6:return 9; case 7:return 8; case 8:return 59; case 0x0A:return 120; case 0x0C:return 8; default:throw new InvalidDataException("Unsupported settings read report"); }
+    }
+    // Receiver USB transfers use a 64-byte envelope independently of the
+    // requested logical record length. A0 itself remains an eight-byte ACK.
+    // Long receiver records are deliberately excluded until reassembly is qualified.
+    internal static int ConfigurationReadLength(ushort product, byte report, int logicalLength) {
+        Require(product == 0x2148 || product == 0xFA60, "Unsupported configuration product");
+        int expected = report == 0xA0 || report == 0x0B ? 8 : SettingsReadLength(report);
+        Require(logicalLength == expected, "Unexpected logical configuration read length");
+        if (product == 0x2148 || report == 0xA0) return logicalLength;
+        Require(logicalLength <= 64, "Receiver long-read framing is not qualified; no query was sent");
+        return 64;
+    }
+    internal static byte[] ConfigurationReply(ushort product, byte report, int logicalLength, byte[] response) {
+        int transferLength = ConfigurationReadLength(product, report, logicalLength);
+        Require(response != null && response.Length == transferLength, "Unexpected configuration transfer length");
+        // Transport tail bytes may contain previous data. Never interpret them
+        // as a second record or include them in logical checksums or OLED markers.
+        byte[] result = new byte[logicalLength]; Buffer.BlockCopy(response, 0, result, 0, result.Length);
+        return result;
+    }
+    // Windows HID feature buffer size is distinct from GO4's logical length.
+    // The receiver exposes 134-byte features. Preserve the validated 64-byte
+    // prefix and zero-pad its USB envelope; never enlarge the wired EP0 write.
+    internal static byte[] OledSetBuffer(ushort product, int featureBytes, byte[] report) {
+        OledShortProtocol.ValidateWriteChunk(report);
+        Require(product == 0x2148 || product == 0xFA60, "Unsupported OLED product");
+        Require(featureBytes >= 64, "OLED feature capacity is too small");
+        if(product == 0x2148) return (byte[])report.Clone();
+        Require(featureBytes == 134, "Unqualified receiver OLED feature capacity");
+        byte[] envelope = new byte[featureBytes]; Buffer.BlockCopy(report,0,envelope,0,report.Length);
+        return envelope;
+    }
+    // Separate experimental SET04 carrier. Never admit this packet through
+    // ValidateSend/SendSettings, and never enable it for stock/OL5.
+    internal static void ValidateOl6RadioIdentity(ushort product, int featureBytes, byte[] firmware, byte[] profile) {
+        Require(product==0xFA60 && featureBytes==134,"OL6 carrier requires the exact normal receiver interface");
+        var caps=OledProtocol.DecodeFirmwareCapabilities(firmware);
+        Require(caps.Extension=="OL6" || caps.Extension=="OL7" || caps.Extension=="OL8" || caps.Extension=="OL9","Reserved OLED carrier requires OL6..OL9 on this same handle; no frame was sent");
+        byte[] active=DecodeProfile(profile);
+        Require(active[0]==1,"Experimental OL6 carrier requires active profile1; no profile is selected automatically");
+    }
+    internal static byte[] Ol6RadioCarrier(byte[] chunk) {
+        OledShortProtocol.ValidateWriteChunk(chunk);
+        byte[] packet=new byte[56];
+        byte[] header={4,56,1,0,1,0x3F,0xA5,0x5A,chunk[7],chunk[8],chunk[10],40};
+        Buffer.BlockCopy(header,0,packet,0,header.Length);
+        Buffer.BlockCopy(chunk,12,packet,12,12);
+        // Byte24 is a deliberately INVALID native DPI stage. Valid settings
+        // have1..8 there, even when their other flags are nonzero.
+        Buffer.BlockCopy(chunk,24,packet,25,28);
+        ushort crc=OledProtocol.Crc16CcittFalse(packet,0,53);
+        packet[53]=(byte)crc;packet[54]=(byte)(crc>>8);packet[55]=6;
+        return packet;
+    }
+    internal static byte[] Ol9RadioCarrier(byte[] chunk) {
+        OledShortProtocol.ValidateWriteChunk(chunk);
+        byte[] packet=new byte[56];
+        byte[] header={4,56,1,0,1,0x3F,chunk[7],chunk[8],chunk[10],40};
+        Buffer.BlockCopy(header,0,packet,0,header.Length);
+        Buffer.BlockCopy(chunk,12,packet,10,14);Buffer.BlockCopy(chunk,26,packet,25,25);
+        packet[54]=chunk[51];packet[55]=9;
+        int sum=0;for(int i=3;i<50;i++)sum+=packet[i];packet[50]=(byte)(sum>>8);packet[51]=(byte)sum;
+        byte[] input=new byte[53];Buffer.BlockCopy(packet,0,input,0,52);input[52]=packet[54];
+        ushort crc=OledProtocol.Crc16CcittFalse(input,0,input.Length);packet[52]=(byte)crc;packet[53]=(byte)(crc>>8);
+        return packet;
     }
     internal static byte[] ReadSettingsRequest(byte report, int profile) {
         ValidateProfileNumber(profile); return new byte[] { 0xA0, report, (byte)SettingsReadLength(report), 0, (byte)profile, 0, 0, 0 };
@@ -53,6 +125,7 @@ internal static class G9Wire {
             "Unexpected active-profile report, length or selector");
         Require(data[3] > 0 && data[3] <= 5 && data[5] > 0 && data[5] <= 5 &&
             (data[3] ^ data[4]) == 255 && (data[5] ^ data[6]) == 255, "Invalid active-profile complement bytes");
+        Require(data[3] <= data[5] && data[7] == 0, "Invalid active-profile order or logical padding");
         return new byte[] { data[3], data[5] };
     }
     internal static void ValidateSend(byte[] data) {
@@ -202,25 +275,28 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
         Console.WriteLine("SEND len={0} data={1}", packet.Length, G9Wire.Hex(packet));
     }
     byte[] Read(byte[] request, byte report, int length) {
+        int transferLength = G9Wire.ConfigurationReadLength(Device.Product, report, length);
+        if (transferLength > Device.FeatureBytes) throw new InvalidDataException("Configuration read exceeds the device report buffer; no query was sent");
         Furycube.G9.Protocol.G9ReadHandshake.ValidateIdle(Get(0xA0, 8)); Thread.Sleep(100);
         Send(request);
         var deadline=System.Diagnostics.Stopwatch.StartNew();
         Furycube.G9.Protocol.G9ReadHandshake.WaitForReady(delegate {return Get(0xA0,8);},Thread.Sleep,delegate {return deadline.ElapsedMilliseconds;},2000,100,500);
         Thread.Sleep(100);
         // A granted read is consumed exactly once, including on validation failure.
-        byte[] response = Get(report, length); Thread.Sleep(150); return response;
+        byte[] response = Get(report, transferLength); Thread.Sleep(150);
+        return G9Wire.ConfigurationReply(Device.Product, report, length, response);
     }
     internal byte[] ReadKeys() { return ReadKeys(1); }
-    internal byte[] ReadKeys(int profile) { return G9Wire.DecodeKeys(Read(G9Wire.ReadKeysRequest(profile), 8, Device.Product == 0x2148 ? 59 : 64),profile); }
+    internal byte[] ReadKeys(int profile) { return G9Wire.DecodeKeys(Read(G9Wire.ReadKeysRequest(profile), 8, 59),profile); }
     internal byte[] ReadProfile() { return G9Wire.DecodeProfile(Read(G9Wire.ReadProfileRequest(), 12, 8)); }
     internal byte[] ReadFirmware() { return G9Wire.DecodeFirmware(Read(G9Wire.ReadFirmwareRequest(), 11, 8)); }
     ushort IG9SettingsSession.SettingsProductId { get { return Device.Product; } }
     string IG9SettingsSession.SettingsDevicePath { get { return Device.Path; } }
     void EnsureSettingsIdentity() {
-        if(Device.Product!=0x2148 || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes<120)
-            throw new InvalidOperationException("Full settings require the same open wired G9 configuration interface.");
+        if((Device.Product!=0x2148 && Device.Product!=0xFA60) || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes<(Device.Product==0x2148?120:64))
+            throw new InvalidOperationException("Settings require the same open G9 configuration interface.");
         var attributes=new G9Hid.Attributes {Size=(uint)Marshal.SizeOf(typeof(G9Hid.Attributes))};
-        if(!G9Hid.HidD_GetAttributes(handle,ref attributes) || attributes.Vendor!=0x1D57 || attributes.Product!=0x2148)
+        if(!G9Hid.HidD_GetAttributes(handle,ref attributes) || attributes.Vendor!=0x1D57 || attributes.Product!=Device.Product)
             throw new InvalidOperationException("Settings device identity changed; transaction stopped.");
     }
     byte[] IG9SettingsSession.QuerySettings(byte report,int profile) {
@@ -247,6 +323,30 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             return G9SettingsTransactions.RestoreProfilePair(this,snapshotFile,backupDirectory);
         }
     }
+    internal void WriteOl6RadioExperiment(byte[] frame) {
+        lock(oledGate) {
+            OledProtocol.ValidateFrame(frame);
+            if(Device.Product!=0xFA60 || Device.FeatureBytes!=134)throw new InvalidDataException("OL6 radio experiment requires receiver FA60/134; no feature command sent");
+            EnsureSettingsIdentity();
+            byte[] firmware=ReadFirmware();
+            // Reject old firmware before any further query or reserved packet.
+            string extension=OledProtocol.DecodeFirmwareCapabilities(firmware).Extension;
+            if(extension!="OL6" && extension!="OL7" && extension!="OL8" && extension!="OL9")throw new InvalidDataException("OL6..OL9 firmware is required; no reserved carrier sent");
+            G9Wire.ValidateOl6RadioIdentity(Device.Product,Device.FeatureBytes,firmware,ReadProfile());
+            for(int index=0;index<12;index++) {
+                EnsureSettingsIdentity();
+                byte[] pixels=new byte[40];Buffer.BlockCopy(frame,index*40,pixels,0,40);
+                byte[] chunk=OledShortProtocol.BuildWriteChunk(index/3,(index%3)*40,pixels,index==0);
+                byte[] packet=extension=="OL9"?G9Wire.Ol9RadioCarrier(chunk):G9Wire.Ol6RadioCarrier(chunk);
+                // Same exact56-byte USB report length as the successful sensor
+                // SET04 experiment. Report22 padding is intentionally not used.
+                if(!G9Hid.HidD_SetFeature(handle,packet,packet.Length))throw new Win32Exception(Marshal.GetLastWin32Error(),"OL6 carrier failed; no remaining chunks sent");
+                Console.WriteLine("OL6_RADIO_SEND index={0} firmware={2} len=56 data={1}",index,G9Wire.Hex(packet),extension);
+                Thread.Sleep(500);
+            }
+            Console.WriteLine("OL6_RADIO_EXPERIMENT_SENT=12 DISPLAY_VERIFIED=false; no automatic follow-up query or retry");
+        }
+    }
     void EnsureOledIdentity(bool discovery = false) {
         if ((Device.Product != 0x2148 && Device.Product != 0xFA60) || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes < OledShortProtocol.FeatureBytes) {
             oledAuthorized = oledRuntimeStatusAuthorized = false;
@@ -261,6 +361,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
     }
     public byte[] ReadOledFirmware() {
         lock (oledGate) {
+            G9Wire.RequireQualifiedOledTransport(Device.Product);
             oledAuthorized = oledRuntimeStatusAuthorized = oledShortReportsAuthorized = oledRadioAuthorized = false; EnsureOledIdentity(true);
             byte[] reply = ReadFirmware();
             try {
@@ -281,10 +382,11 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             EnsureOledIdentity();
             if (!oledShortReportsAuthorized) throw new OledFirmwareUnsupportedException("OL4 is required for single-packet OLED writes; OL2/OL3 image uploads are disabled.");
             OledShortProtocol.ValidateWriteChunk(report);
-            if (!G9Hid.HidD_SetFeature(handle, report, report.Length)) {
+            byte[] envelope = G9Wire.OledSetBuffer(Device.Product, Device.FeatureBytes, report);
+            if (!G9Hid.HidD_SetFeature(handle, envelope, envelope.Length)) {
                 oledAuthorized = oledRuntimeStatusAuthorized = false; throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED SetFeature failed; remaining pages were not sent");
             }
-            Console.WriteLine("OLED_SEND len={0} page={1} x={2} flags={3}", report.Length, report[7], report[8], report[10]);
+            Console.WriteLine("OLED_SEND len={0} usbLen={4} page={1} x={2} flags={3}", report.Length, report[7], report[8], report[10], envelope.Length);
         }
     }
     public byte[] ReadOledRuntimeStatus() {
@@ -353,7 +455,7 @@ internal static class G9DeviceProgram {
         try {
             if (args.Length == 0) { Console.WriteLine("G9Device mapping [--active|--profile1..5] | assign --profile N --index N --function HEX --param1 HEX --param2 HEX | settings-read [--profile N] | settings-set --field ID --value VALUE [--profile N] | profile-restore --file <settings snapshot.json> | inspect | profile | firmware | zero | backup | restore <backup.bin> | oled-caps | oled-status | oled-frame --file <480-byte-frame.bin> | oled-stream | caps [--pid2148|fa60] [--backup-dir path]"); return 2; }
             string command = args[0];
-            if (command != "inspect" && command != "mapping" && command != "profile" && command != "profile-restore" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "settings-read" && command != "settings-set" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-stream" && command != "caps") throw new ArgumentException("Unknown command");
+            if (command != "inspect" && command != "mapping" && command != "profile" && command != "profile-restore" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "settings-read" && command != "settings-set" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-stream" && command != "ol6-radio-frame" && command != "caps") throw new ArgumentException("Unknown command");
             ushort pid = 0; string restore = null, expectedPath = null;
             string frameFile = null; byte[] oledFrame = null;
             int? assignmentIndex = null; byte? function = null; byte param1 = 0, param2 = 0;
@@ -378,7 +480,7 @@ internal static class G9DeviceProgram {
                 else if (command == "assign" && args[i] == "--function" && i + 1 < args.Length) function = HexByte(args[++i]);
                 else if (command == "assign" && args[i] == "--param1" && i + 1 < args.Length) param1 = HexByte(args[++i]);
                 else if (command == "assign" && args[i] == "--param2" && i + 1 < args.Length) param2 = HexByte(args[++i]);
-                else if (command == "oled-frame" && args[i] == "--file" && i + 1 < args.Length && frameFile == null) frameFile = Path.GetFullPath(args[++i]);
+                else if ((command == "oled-frame" || command == "ol6-radio-frame") && args[i] == "--file" && i + 1 < args.Length && frameFile == null) frameFile = Path.GetFullPath(args[++i]);
                 else if (command == "restore" && restore == null) restore = Path.GetFullPath(args[i]);
                 else throw new ArgumentException("Unexpected command argument");
             }
@@ -391,7 +493,7 @@ internal static class G9DeviceProgram {
             }
             if(activeMapping && requestedProfile.HasValue) throw new ArgumentException("Choose either --active or --profile");
             if(command=="settings-set" && (String.IsNullOrEmpty(settingField) || settingValue==null)) throw new ArgumentException("Settings write requires --field and --value");
-            if (command == "oled-frame") {
+            if (command == "oled-frame" || command == "ol6-radio-frame") {
                 if (frameFile == null || new FileInfo(frameFile).Length != OledProtocol.BufferBytes) throw new InvalidDataException("OLED upload requires --file pointing to a 480-byte packed frame");
                 oledFrame = File.ReadAllBytes(frameFile); OledProtocol.ValidateFrame(oledFrame);
             }
@@ -407,6 +509,7 @@ internal static class G9DeviceProgram {
                 Console.WriteLine("CAPS ONLY: no feature reports requested or settings written."); return 0;
             }
             using (var device = new G9Connection(pid,expectedPath)) {
+                if(command=="ol6-radio-frame") { device.WriteOl6RadioExperiment(oledFrame);return 0; }
                 if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out, new NativeOledTransport(device));
                 if (command == "oled-caps" || command == "oled-frame" || command == "oled-status") {
                     var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();

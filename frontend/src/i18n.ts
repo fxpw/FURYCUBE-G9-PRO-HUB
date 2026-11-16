@@ -99,8 +99,8 @@ export const english: Record<string, string> = {
   "Загрузка CPU": "CPU usage",
   "Загрузка GPU": "GPU usage",
   "Загрузка RAM": "RAM usage",
-  "Загрузка OLED требует прошивки OL4 по USB или OL5 по USB / радио. Текущая:":
-    "OLED upload requires OL4 over USB or OL5 over USB / radio. Current firmware:",
+  "Загрузка OLED сейчас доступна по USB с OL4 или OL5. Передача через приёмник временно отключена. Текущая:":
+    "OLED upload is currently available over USB with OL4 or OL5. Receiver transfers are temporarily disabled. Current firmware:",
   "Заданное количество": "Repeat count",
   "Закрыть уведомление": "Dismiss notification",
   "Заменить изображение": "Replace image",
@@ -211,8 +211,8 @@ export const english: Record<string, string> = {
   "Пока кнопка удерживается": "While button is held",
   "Показать журнал": "Show log",
   "Показывать название показателя": "Show reading label",
-  "Полный набор настроек читается и записывается по USB. Подключите кабель, чтобы редактировать DPI, сенсор и питание.":
-    "The complete settings are read and written over USB. Connect the cable to edit DPI, sensor and power settings.",
+  "По 2.4G доступны назначения, DPI, сенсор и частота опроса. Для таймеров питания и debounce подключите USB-кабель.":
+    "Button assignments, DPI, sensor and polling rate are available over 2.4G. Connect USB for power timers and debounce.",
   "Положение изображения": "Image position",
   "Порог чёрного и белого": "Black and white threshold",
   "После обнаружения здесь появятся назначения, прочитанные из её памяти.":
@@ -491,6 +491,26 @@ export function uiMessage(value: string): string {
     ([ru, en]) => value === ru || value === en,
   );
   return entry ? (locale.value === "en" ? entry[1] : entry[0]) : value;
+}
+export function oledStatus(value: string): string {
+  if (locale.value !== "en") return value;
+  const phrases: [string, string][] = [
+    [
+      "Восстановлен последний переданный кадр.",
+      "Last submitted frame restored.",
+    ],
+    ["Восстановление OLED остановлено:", "OLED restore stopped:"],
+    ["Кадров отправлено:", "Frames sent:"],
+    [
+      "Автообновление включено; HUB должен работать.",
+      "Live updates enabled; keep the HUB running.",
+    ],
+    [
+      "Сохранённый кадр повреждён; отправьте макет вручную.",
+      "The saved frame is damaged; upload the layout manually.",
+    ],
+  ];
+  return phrases.reduce((text, [ru, en]) => text.replace(ru, en), value);
 }
 export function firmwareName(value: string | null | undefined): string {
   return locale.value === "en"

@@ -48,6 +48,7 @@ internal static class SettingsTransactionTests {
             if(report==10)return ShortAllData?new byte[8]:(byte[])all.Clone();
             if(report==4){byte[] full=MouseSettingsCodec.BuildSetPacket(model,4);var raw=new byte[52];Buffer.BlockCopy(full,0,raw,0,52);raw[1]=52;if(CorruptSensor)raw[51]^=1;return raw;}
             if(report==6)return MouseSettingsCodec.BuildSetPacket(model,6);
+            if(report==5)return MouseSettingsCodec.BuildSetPacket(model,5);
             if(report==7)return new byte[]{7,8,(byte)profile,2,253,(byte)(Active-1),(byte)((Active-1)^255),0};
             if(report==8){var raw=new byte[59];raw[0]=8;raw[1]=59;raw[2]=(byte)profile;Buffer.BlockCopy(all,65,raw,3,54);int sum=Sum(raw,3,54);raw[57]=(byte)(sum>>8);raw[58]=(byte)sum;return raw;}
             throw new Exception("Unexpected query "+report.ToString("x2"));
@@ -103,7 +104,7 @@ internal static class SettingsTransactionTests {
         fake=new Fake();fake.Maximum=2;Reject(delegate{G9SettingsTransactions.Apply(fake,2,"active-profile","4",Root);},"activation cannot implicitly increase count");Check(fake.Writes.Count==0,"invalid active writes none");
         fake=new Fake();Reject(delegate{G9SettingsTransactions.Apply(fake,2,"rf.power","3",Root);},"missing RF baseline fails closed");Check(fake.Writes.Count==0,"RF SET never sent");
         fake=new Fake();Reject(delegate{G9SettingsTransactions.Read(fake,3,Root);},"inactive requested profile refused");Check(fake.Queries==1 && fake.Writes.Count==0,"active mismatch stops after profile read");
-        fake=new Fake();fake.Pid=0xFA60;Reject(delegate{G9SettingsTransactions.Read(fake,null,Root);},"receiver long reads unqualified");Check(fake.Queries==0,"receiver refusal before reports");
+        RadioSettings();
         fake=new Fake();fake.ShortAllData=true;Reject(delegate{G9SettingsTransactions.Apply(fake,2,"debounce.ms","16",Root);},"short logical body cannot authorize write");Check(fake.Writes.Count==0,"short body sends no SET");
         fake=new Fake();fake.CorruptSensor=true;Reject(delegate{G9SettingsTransactions.Apply(fake,2,"debounce.ms","16",Root);},"independent sensor validation");Check(fake.Writes.Count==0,"bad source sends no SET");
         fake=new Fake();fake.DriftOnProfileQuery=2;Reject(delegate{G9SettingsTransactions.Read(fake,2,Root);},"profile drift during read");Check(fake.Writes.Count==0,"read drift writes none");
@@ -115,6 +116,32 @@ internal static class SettingsTransactionTests {
             Reject(delegate{G9Wire.ValidateSend(denied);},"loader/reset/unscoped query denied");
         Check(G9Wire.BuildProfileSet(2,5)[4]==5,"profile packet preserves explicit maximum");
         ProfilePairRestore();
+    }
+    static void RadioSettings() {
+        var fake=new Fake{Pid=0xFA60};var snapshot=G9SettingsTransactions.Read(fake,null,Root);
+        Check(snapshot.Model.IsDeviceReadback&&!snapshot.Model.IsCompleteProfile,"RF settings records are device data without invented full profile");
+        Check(!fake.Calls.Exists(x=>x.StartsWith("0a:")),"RF never requests unsupported GET0A");
+        Check(fake.Writes.Count==0&&fake.Queries==9,"RF reads available bodies twice and profile twice without SET");
+        Check(!File.Exists(Path.Combine(Path.GetDirectoryName(snapshot.ArchivePath),"logical-profile-117.bin")),"RF archive contains no fabricated117-byte body");
+        Check((string)snapshot.ToDto()["source"]=="FirmwareSettingsRecords"&&snapshot.ToDto()["fullBodyHex"]==null,"RF DTO labels partial provenance");
+        Check(!snapshot.Model.HasLight&&!File.Exists(Path.Combine(Path.GetDirectoryName(snapshot.ArchivePath),"light.bin")),"RF never fabricates power baseline");
+        Check(!fake.Calls.Exists(x=>x.StartsWith("05:")),"unsupported GET05 never requested");
+        foreach(var field in new[]{new[]{"sensor.ripple","0"},new[]{"sensor.angleSnap","0"},new[]{"dpi.value1","2400"},new[]{"polling.hz","500"}}) {
+            fake=new Fake{Pid=0xFA60};byte[] original=(byte[])fake.Profiles[2].Clone();
+            var expected=MouseSettingsCodec.BuildEdit(MouseSettingsCodec.DecodeAllData(original,2),field[0],field[1]);
+            var result=G9SettingsTransactions.Apply(fake,2,field[0],field[1],Root);
+            Check(fake.Writes.Count==1&&(bool)result["verified"],"RF one verified narrow SET "+field[0]);
+            Check(G9Wire.Equal(expected.Packet,fake.Writes[0]),"RF packet equals known wired serializer "+field[0]);
+            Check(fake.Profiles[2][52]==original[52],"RF narrow SET never invents/writes unknown alignment "+field[0]);
+            Check(!fake.Calls.Exists(x=>x.StartsWith("0a:")),"RF apply/readback uses short records only "+field[0]);
+        }
+        foreach(string field in new[]{"sleep.idleMinutes","sleep.level1Seconds","debounce.ms"}) {
+            fake=new Fake{Pid=0xFA60};Reject(delegate{G9SettingsTransactions.Apply(fake,2,field,"30",Root);},"RF unknown power baseline "+field);Check(fake.Writes.Count==0,"no RF power write without readback "+field);
+        }
+        fake=new Fake{Pid=0xFA60,DropWrite=true};Reject(delegate{G9SettingsTransactions.Apply(fake,2,"dpi.value1","2400",Root);},"RF changed value not returned");Check(fake.Writes.Count==1,"RF no retry after failed readback");
+        fake=new Fake{Pid=0xFA60,CorruptSensor=true};Reject(delegate{G9SettingsTransactions.Apply(fake,2,"sleep.idleMinutes","11",Root);},"RF corrupt baseline");Check(fake.Writes.Count==0,"RF corrupt baseline sends no SET");
+        fake=new Fake{Pid=0xFA60,DriftOnProfileQuery=2};Reject(delegate{G9SettingsTransactions.Read(fake,null,Root);},"RF profile changes while reading");Check(fake.Writes.Count==0,"RF profile drift no SET");
+        fake=new Fake{Pid=0x1234};Reject(delegate{G9SettingsTransactions.Read(fake,null,Root);},"unknown product rejected");Check(fake.Queries==0,"unknown product no commands");
     }
     static byte[] PairReport(int active,int maximum){return new byte[]{12,8,1,(byte)active,(byte)(active^255),(byte)maximum,(byte)(maximum^255),0};}
     static string SourceSnapshot(Action<Dictionary<string,object>> change) {

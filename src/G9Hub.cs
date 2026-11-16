@@ -374,13 +374,13 @@ internal sealed partial class G9Hub : Form {
             G9StartupRead result=scan.Read;
             if(result==null) {startupStatus.Text="G9 PRO не подключена. Ожидаю подключение; вручную прочитать мышь можно на нужной вкладке.";return false;}
             bool accepted;
-            if(result.Wired) {
+            if(result.Wired || result.Output.IndexOf("SETTINGS_JSON ",StringComparison.Ordinal)>=0) {
                 var snapshot=G9SettingsSnapshot.Parse(result.Output,false);
                 var mapping=G9MappingSnapshot.FromKeymap(snapshot.profile,snapshot.Keys);
                 latestSettings=snapshot;latestMapping=mapping;
                 bool settingsAccepted=settingsEditor.AcceptStartupSnapshot(snapshot);
                 bool buttonsAccepted=buttonEditor.AcceptStartupSnapshot(mapping);accepted=settingsAccepted && buttonsAccepted;
-                startupStatus.Text="USB: прочитаны назначения, DPI, сенсор, питание и доступные параметры профиля "+snapshot.profile+" из "+snapshot.maxProfiles+".";
+                startupStatus.Text=(result.Wired?"USB: прочитаны назначения, DPI, сенсор, питание":"2.4G: прочитаны назначения, DPI и сенсор; для питания нужен USB")+". Профиль "+snapshot.profile+" из "+snapshot.maxProfiles+".";
             } else {
                 var mapping=G9MappingSnapshot.Parse(result.Output);latestMapping=mapping;accepted=buttonEditor.AcceptStartupSnapshot(mapping);
                 startupStatus.Text="2.4G: прочитаны назначения профиля "+mapping.profile+". Для чтения DPI, сенсора и питания подключите USB-кабель.";
@@ -429,7 +429,7 @@ internal sealed partial class G9Hub : Form {
     }
     async Task ResumeWhenReady() {
         if(!resumeReady || closing || IsDisposed)return;
-        resumeReady=false;resumeAfterChange=false;await screenEditor.ResumeLive();
+        resumeReady=false;resumeAfterChange=false;await screenEditor.ResumeDisplay();
     }
     G9OledWorker CreateOledWorker(string identity) {
         return new G9OledWorker(new ProcessStartInfo {FileName=Path.Combine(root,"bin","G9Device.exe"),WorkingDirectory=root,Arguments="oled-stream"+G9Startup.DeviceSuffix(identity)},Append,30000);

@@ -139,7 +139,7 @@ internal sealed partial class G9Hub {
             try{
                 if(method=="device.assign")await VueProtocol(G9WebApi.Assign(payload)+suffix,generation);
                 else{
-                    if(!latestDeviceRead.Wired||latestSettings==null)throw new InvalidOperationException("Для DPI, сенсора и питания подключите USB-кабель.");
+                    if(latestSettings==null)throw new InvalidOperationException("Сначала прочитайте настройки подключённой мыши.");
                     object changesValue;object[] changes;bool transferKeys=payload.ContainsKey("includeButtons")&&G9WebApi.Flag(payload,"includeButtons");if(!payload.TryGetValue("changes",out changesValue)||(changes=changesValue as object[])==null||changes.Length>40||(changes.Length<1&&!transferKeys))throw new InvalidDataException("Выберите изменённые настройки.");
                     var draft=new Dictionary<string,string>(StringComparer.Ordinal);
                     foreach(object item in changes){var row=item as Dictionary<string,object>;if(row==null)throw new InvalidDataException("Неверный параметр.");string id=G9WebApi.Text(row,"id",80),value=G9WebApi.Text(row,"value",100);if(draft.ContainsKey(id))throw new InvalidDataException("Повторный параметр: "+id);draft.Add(id,value);}
@@ -181,14 +181,14 @@ internal sealed partial class G9Hub {
     void VueProfileOperation(string method,Dictionary<string,object> payload) {
         string id=payload.ContainsKey("id")?G9WebApi.Text(payload,"id",32):null;
         if(method=="profiles.save"){
-            if(latestSettings==null||latestMapping==null)throw new InvalidOperationException("Сначала прочитайте мышь по USB.");
+            if(latestSettings==null||latestMapping==null)throw new InvalidOperationException("Сначала прочитайте настройки подключённой мыши.");
             var values=new Dictionary<string,string>();foreach(var field in latestSettings.fields)if(field.canWrite&&field.id!="active-profile"&&field.id!="max-profiles")values.Add(field.id,field.value);
             if(vueProfileDraft!=null)foreach(var pair in vueProfileDraft.values)if(values.ContainsKey(pair.Key))values[pair.Key]=pair.Value;
             object supplied;if(payload.TryGetValue("values",out supplied)){var rows=supplied as Dictionary<string,object>;if(rows==null)throw new InvalidDataException("Неверные настройки профиля.");foreach(var pair in rows){if(!values.ContainsKey(pair.Key)||!(pair.Value is string))throw new InvalidDataException("Недоступный параметр профиля.");values[pair.Key]=(string)pair.Value;}}
             G9MouseSettingsEditor.PrepareEdits(latestSettings,values.Where(x=>latestSettings.fields.First(f=>f.id==x.Key).value!=x.Value).ToDictionary(x=>x.Key,x=>x.Value,StringComparer.Ordinal));
             vueProfiles.SaveNew(new G9SettingsPreset{schemaVersion=1,values=values,keymapHex=latestMapping.keymapHex},G9WebApi.Text(payload,"name",100));
         }else if(method=="profiles.open"){
-            if(latestSettings==null)throw new InvalidOperationException("Сначала прочитайте мышь по USB.");var draft=vueProfiles.Read(id);
+            if(latestSettings==null)throw new InvalidOperationException("Сначала прочитайте настройки подключённой мыши.");var draft=vueProfiles.Read(id);
             foreach(var pair in draft.values)if(!latestSettings.fields.Any(f=>f.id==pair.Key&&f.canWrite))throw new InvalidDataException("Недоступный параметр профиля: "+pair.Key);
             G9MouseSettingsEditor.PrepareEdits(latestSettings,draft.values.Where(x=>latestSettings.fields.First(f=>f.id==x.Key).value!=x.Value).ToDictionary(x=>x.Key,x=>x.Value,StringComparer.Ordinal));vueProfileDraft=draft;
         }

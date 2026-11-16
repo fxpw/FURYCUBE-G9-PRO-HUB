@@ -5,7 +5,7 @@ using System.Globalization;
 
 namespace Furycube.G9.Settings
 {
-    public enum MouseSettingsSourceKind { FirmwareLogicalProfile = 1, CapturedOutgoingArchive = 2 }
+    public enum MouseSettingsSourceKind { FirmwareLogicalProfile = 1, CapturedOutgoingArchive = 2, FirmwareSettingsRecords = 3 }
 
     public sealed class MouseSettingOption
     {
@@ -45,7 +45,7 @@ namespace Furycube.G9.Settings
         readonly byte[] body, sensor, light, polling;
         public int ProfileId { get; private set; }
         public MouseSettingsSourceKind SourceKind { get; private set; }
-        public bool IsDeviceReadback { get { return SourceKind == MouseSettingsSourceKind.FirmwareLogicalProfile; } }
+        public bool IsDeviceReadback { get { return SourceKind == MouseSettingsSourceKind.FirmwareLogicalProfile || SourceKind == MouseSettingsSourceKind.FirmwareSettingsRecords; } }
         public bool IsCompleteProfile { get { return body != null; } }
         public bool HasSensor { get { return sensor != null; } }
         public bool HasLight { get { return light != null; } }
@@ -149,6 +149,22 @@ namespace Furycube.G9.Settings
             Header(report, 6, PollingReportBytes, expectedProfile); ZeroTail(report, 5);
             byte[] body = Slice(report, 3, 2); ValidatePollingBody(body); return body;
         }
+        // GET05 is an empty/default branch in the stock dispatcher. Do not
+        // invent power settings from that zero-filled reply or an OEM preset.
+        public static MouseSettingsProfile DecodeSettingsRecords(int profile,byte[] sensor52,byte[] polling9) {
+            return new MouseSettingsProfile(profile,MouseSettingsSourceKind.FirmwareSettingsRecords,null,
+                DecodeSensor(sensor52,profile),null,DecodePolling(polling9,profile));
+        }
+        public static bool SameSettings(MouseSettingsProfile a,MouseSettingsProfile b) {
+            if(a==null||b==null||a.ProfileId!=b.ProfileId)return false;
+            if(a.IsCompleteProfile&&b.IsCompleteProfile) return SameBytes(a.GetBodyCopy(),b.GetBodyCopy());
+            return SameBytes(a.GetSensorBodyCopy(),b.GetSensorBodyCopy())&&SameBytes(a.GetLightBodyCopy(),b.GetLightBodyCopy())&&SameBytes(a.GetPollingBodyCopy(),b.GetPollingBodyCopy());
+        }
+        static bool SameBytes(byte[] a,byte[] b) {
+            if(a==null||b==null)return a==b;
+            if(a.Length!=b.Length)return false;
+            for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;
+        }
         public static MouseSettingsProfile DecodeCapturedSetFrames(int expectedProfile, byte[] sensor56, byte[] light15, byte[] polling9)
         {
             Profile(expectedProfile); byte[] sensor = null, light = null, poll = null;
@@ -247,7 +263,7 @@ namespace Furycube.G9.Settings
         public static MouseSettingsEdit BuildEdit(MouseSettingsProfile baseline, string field, string value)
         {
             if (baseline == null) throw new ArgumentNullException("baseline");
-            if (!baseline.IsDeviceReadback || !baseline.IsCompleteProfile) throw new InvalidOperationException("An edit requires a complete fresh logical readback, not a saved outgoing archive.");
+            if (!baseline.IsDeviceReadback || !baseline.HasSensor || !baseline.HasPolling) throw new InvalidOperationException("An edit requires fresh complete settings bodies, not a saved outgoing archive.");
             MouseSettingField selected = null; foreach (var item in GetFields(baseline)) if (item.Id == field) selected = item;
             if (selected == null) throw new ArgumentException("Unknown G9 setting field.", "field");
             if (!selected.CanWrite) throw new NotSupportedException(selected.UnsupportedReason);
@@ -281,9 +297,12 @@ namespace Furycube.G9.Settings
             else if (field == "sleep.idleMinutes") { int min = Parse(value, 1, 60); l[1] = (byte)((l[1] & 15) | (min & 0xF0)); l[2] = (byte)((l[2] & 15) | ((min & 15) << 4)); report = 5; }
             else throw new NotSupportedException("This field has no proven G9 serializer.");
             ValidateSensorBody(s); ValidatePollingBody(poll);
-            byte[] all = baseline.GetBodyCopy(); Buffer.BlockCopy(s, 0, all, 2, 47); Buffer.BlockCopy(l, 0, all, 52, 8); Buffer.BlockCopy(poll, 0, all, 0, 2);
-            int sum = Sum(s, 0, 47); all[50] = (byte)sum; all[51] = (byte)(sum >> 8);
-            sum = Sum(l, 0, 8); all[60] = (byte)sum; all[61] = (byte)(sum >> 8);
+            byte[] all = baseline.IsCompleteProfile ? baseline.GetBodyCopy() : null;
+            if(all!=null) {
+                Buffer.BlockCopy(s, 0, all, 2, 47); Buffer.BlockCopy(l, 0, all, 52, 8); Buffer.BlockCopy(poll, 0, all, 0, 2);
+                int sum = Sum(s, 0, 47); all[50] = (byte)sum; all[51] = (byte)(sum >> 8);
+                sum = Sum(l, 0, 8); all[60] = (byte)sum; all[61] = (byte)(sum >> 8);
+            }
             var updated = new MouseSettingsProfile(baseline.ProfileId, baseline.SourceKind, all, s, l, poll);
             return new MouseSettingsEdit(field, report, BuildSetPacket(updated, report), updated);
         }

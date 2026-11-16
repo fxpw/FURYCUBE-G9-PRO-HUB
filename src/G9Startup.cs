@@ -57,7 +57,7 @@ internal static class G9Startup {
     internal static G9StartupRead ReadDeviceFromCaps(Func<string,string> run,string caps) {
         string identity=SelectedIdentity(caps);
         if(identity.StartsWith("caps vid=1d57 pid=2148 ",StringComparison.Ordinal))return new G9StartupRead {Wired=true,Output=run("settings-read"+DeviceSuffix(identity))};
-        if(identity.StartsWith("caps vid=1d57 pid=fa60 ",StringComparison.Ordinal))return new G9StartupRead {Wired=false,Output=run("mapping --active"+DeviceSuffix(identity))};
+        if(identity.StartsWith("caps vid=1d57 pid=fa60 ",StringComparison.Ordinal))return new G9StartupRead {Wired=false,Output=run("settings-read"+DeviceSuffix(identity))};
         return null;
     }
     internal static string DeviceSuffix(string identity) {

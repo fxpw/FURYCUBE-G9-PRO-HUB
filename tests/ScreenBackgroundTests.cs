@@ -12,6 +12,8 @@ internal static class ScreenBackgroundTests {
     static readonly JavaScriptSerializer Json=new JavaScriptSerializer();
     static void Check(bool value,string name){if(!value)throw new Exception("FAIL "+name);checks++;}
     static string NumericProject() {var value=new ScreenProject();value.Widgets.Clear();value.Widgets.Add(new ScreenWidget {Kind=WidgetKind.Dpi});return Json.Serialize(value);}
+    static string TextProject(string text){var value=new ScreenProject();value.Widgets.Clear();value.Widgets.Add(new ScreenWidget{Kind=WidgetKind.Text,Text=text});return Json.Serialize(value);}
+    static bool Same(byte[] a,byte[] b){if(a==null||b==null||a.Length!=b.Length)return false;for(int i=0;i<a.Length;i++)if(a[i]!=b[i])return false;return true;}
     static async Task Run(string directory) {
         int statuses=0,frames=0;var delayedStatus=new TaskCompletionSource<OledRuntimeStatus>();
         Func<Task<OledRuntimeStatus>> status=delegate {statuses++;return statuses==1?delayedStatus.Task:Task.FromResult(new OledRuntimeStatus(1,1,2,1600,DateTimeOffset.UtcNow));};
@@ -52,6 +54,59 @@ internal static class ScreenBackgroundTests {
         var closed=new G9ScreenEditor(delegate{},delegate(byte[] bytes){disposedFrames++;return Task.FromResult("bad");},delegate{return delayed.Task;},Path.Combine(directory,"closed.json"),false);
         closed.AcceptProjectJson(NumericProject());Task pending=closed.ResumeLive();closed.Dispose();delayed.SetResult(new OledRuntimeStatus(1,1,2,1600,DateTimeOffset.UtcNow));await pending;
         Check(disposedFrames==0,"dispose cancels late status-to-frame continuation");
+        await RunResume(directory);
+    }
+    static async Task RunResume(string directory){
+        string projectFile=Path.Combine(directory,"resume.json"),cacheFile=projectFile+".last-frame";
+        byte[] first=null;int sent=0,statuses=0;
+        Func<byte[],Task<string>> sender=delegate(byte[] bytes){sent++;if(first==null)first=(byte[])bytes.Clone();else Check(Same(first,bytes),"static restore resends exact successful pixels, not unsent edits");return Task.FromResult("sent");};
+        Func<Task<OledRuntimeStatus>> status=delegate{statuses++;throw new Exception("Static restore must not query DPI");};
+        using(var editor=new G9ScreenEditor(delegate{},sender,status,projectFile,false)){
+            editor.AcceptProjectJson(TextProject("SAVED"));await editor.UploadCurrent();
+            Check(sent==1&&!editor.IsLive&&File.Exists(cacheFile),"manual successful upload persists a static frame");
+            editor.AcceptProjectJson(NumericProject());
+            Check(editor.SuspendDevice("reconnect"),"manual static upload requests reconnect restore");
+            await editor.ResumeDisplay();Check(sent==1,"disconnected display cannot restore");
+            editor.AllowDevice();await editor.ResumeDisplay();
+            Check(sent==2&&statuses==0&&!editor.IsLive,"static reconnect does not enable live or query runtime state");
+        }
+        using(var editor=new G9ScreenEditor(delegate{},sender,status,projectFile,false)){
+            Check(sent==2,"loading a cached frame alone never sends a frame");
+            Check(!editor.SuspendDevice("startup scan"),"cache from a previous process does not claim current display ownership");
+            editor.AllowDevice();await editor.ResumeDisplay();Check(sent==3&&!editor.IsLive,"explicit startup resume preserves static mode");
+        }
+        var bytesBefore=File.ReadAllBytes(cacheFile);
+        using(var editor=new G9ScreenEditor(delegate{},delegate(byte[] bytes){var failure=new TaskCompletionSource<string>();failure.SetException(new IOException("failed transfer"));return failure.Task;},null,projectFile,false)){
+            editor.AcceptProjectJson(TextProject("FAILED"));await editor.UploadCurrent();
+            Check(Same(bytesBefore,File.ReadAllBytes(cacheFile)),"failed upload does not replace last successful disk frame");
+        }
+        string lateFile=Path.Combine(directory,"late.json");var late=new TaskCompletionSource<string>();int lateSends=0;byte[] saved=null;
+        using(var editor=new G9ScreenEditor(delegate{},delegate(byte[] bytes){lateSends++;if(lateSends==1)saved=(byte[])bytes.Clone();if(lateSends==2)return late.Task;if(lateSends==3)Check(Same(saved,bytes),"late old device acknowledgement cannot replace cached frame");return Task.FromResult("ok");},null,lateFile,false)){
+            editor.AcceptProjectJson(TextProject("FIRST"));await editor.UploadCurrent();
+            editor.AcceptProjectJson(TextProject("LATE"));Task pending=editor.UploadCurrent();
+            editor.SuspendDevice("changed");late.SetResult("old ack");await pending;
+            editor.AllowDevice();await editor.ResumeDisplay();Check(lateSends==3&&!editor.IsLive,"fresh device restores prior successful frame after stale acknowledgement");
+        }
+        byte[] corrupted=(byte[])bytesBefore.Clone();corrupted[100]^=1;File.WriteAllBytes(cacheFile,corrupted);int corruptSends=0;
+        using(var editor=new G9ScreenEditor(delegate{},delegate(byte[] bytes){corruptSends++;return Task.FromResult("ok");},null,projectFile,false)){
+            await editor.ResumeDisplay();Check(corruptSends==0,"corrupt cached frame fails closed during automatic resume");
+            editor.AcceptProjectJson(TextProject("RECOVER"));await editor.UploadCurrent();
+            Check(corruptSends==1&&OledResumeCache.Load(cacheFile).HasFrame,"explicit upload replaces corrupt cache with a valid snapshot");
+        }
+        string liveFile=Path.Combine(directory,"live.json");int liveSends=0;
+        using(var editor=new G9ScreenEditor(delegate{},delegate(byte[] bytes){liveSends++;return Task.FromResult("ok");},null,liveFile,false)){
+            editor.AcceptProjectJson(TextProject("LIVE"));await editor.ResumeLive();
+            Check(OledResumeCache.Load(liveFile+".last-frame").Live,"successful live frame persists live mode");
+            editor.SuspendDevice("live reconnect");editor.AllowDevice();await editor.ResumeDisplay();
+            Check(liveSends==2&&editor.IsLive,"live reconnect resumes current rendering");
+            editor.StopLive();Check(!OledResumeCache.Load(liveFile+".last-frame").Live,"explicit stop persists frozen static mode");
+        }
+        var cache=new OledResumeCache();byte[] original=new byte[480];original[0]=1;cache.Remember(original,false);original[0]=9;
+        Check(cache.GetFrame()[0]==1,"caller cannot mutate remembered frame");byte[] copy=cache.GetFrame();copy[0]=8;Check(cache.GetFrame()[0]==1,"reader cannot mutate remembered frame");
+        string atomic=Path.Combine(directory,"atomic.frame");cache.Save(atomic);byte[] old=File.ReadAllBytes(atomic);cache.Remember(new byte[480],true);bool failed=false;
+        using(var locked=new FileStream(atomic,FileMode.Open,FileAccess.Read,FileShare.Read)){try{cache.Save(atomic);}catch(IOException){failed=true;}}
+        Check(failed&&Same(old,File.ReadAllBytes(atomic)),"failed atomic replacement keeps previous valid disk snapshot");
+        Check(Directory.GetFiles(directory,"*.tmp").Length==0,"failed atomic replacement cleans only its temporary file");
     }
     [STAThread] static int Main() {
         string directory=Path.Combine(Path.GetTempPath(),"G9ScreenBackground-"+Guid.NewGuid().ToString("N"));Exception failure=null;

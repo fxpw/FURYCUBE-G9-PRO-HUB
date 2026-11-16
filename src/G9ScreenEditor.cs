@@ -56,6 +56,9 @@ internal sealed partial class G9ScreenEditor : UserControl {
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
     readonly TabControl editingTabs=new TabControl {Dock=DockStyle.Fill};
     readonly string autosaveFile;
+    readonly string resumeFrameFile;
+    OledResumeCache resumeFrame=new OledResumeCache();
+    bool displayOwnedThisRun,resumeFrameInvalid;
     bool syncing,sampling,syncingGeometry,dragging,dirty,disposedEditor;
     int previewScale=5;
     Point dragOffset;
@@ -82,6 +85,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
         report=logger;sendFrame=frameSender;readRuntimeStatus=runtimeStatusReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
         backgroundServicesEnabled=backgroundServices;
         autosaveFile=savedEditorFile??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
+        resumeFrameFile=autosaveFile+".last-frame";
+        try{resumeFrame=OledResumeCache.Load(resumeFrameFile);}catch(Exception error){resumeFrameInvalid=true;Log("Последний кадр OLED не восстановлен: "+error.Message);}
         BuildLayout();BindEvents();bool restored=RestoreAutosave();
         syncing=true;try{preset.SelectedIndex=restored?-1:0;}finally{syncing=false;}
         SyncControls(null,false);Render();if(backgroundServices){timer.Start();telemetry.Start();}
@@ -161,7 +166,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,fontSlider})slider.Track.ValueChanged+=delegate(object sender,EventArgs e){GeometryChanged((TrackBar)sender);};
         preview.Paint+=DrawSelection;preview.MouseDown+=StartDrag;preview.MouseMove+=MoveDrag;preview.MouseUp+=delegate{dragging=false;preview.Capture=false;};preview.Resize+=delegate{Render();};
         timer.Tick+=async delegate{await RefreshSensors();if(!IsDisposed&&!disposedEditor&&live.Checked)await UploadFrame(true);};autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
-        live.CheckedChanged+=async delegate{if(live.Checked&&!syncing)await UploadFrame();};
+        live.CheckedChanged+=async delegate{if(syncing)return;if(live.Checked)await UploadFrame();else{resumeFrame.Freeze();SaveResumeFrame();}};
     }
     LayerItem SelectedLayer(){return layers.SelectedItem as LayerItem;}
     ScreenWidget SelectedWidget(){LayerItem selected=SelectedLayer();return selected==null?null:selected.Widget;}
@@ -288,6 +293,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
             Render();if(current==null){live.Checked=false;return;}
             byte[] pixels=(byte[])current.Buffer.Clone();
             string sent=await sendFrame(pixels);if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;oledNote=sent;
+            resumeFrame.Remember(pixels,live.Checked);resumeFrameInvalid=false;displayOwnedThisRun=true;SaveResumeFrame();
             if(live.Checked)oledNote+=" Автообновление включено; HUB должен работать.";if(!quiet)Log(oledNote);
         }
         catch(Exception error){if(epoch==transportEpoch&&!IsDisposed&&!disposedEditor){lastUploadError=error;runtimeStatus=null;live.Checked=false;oledNote="Передача остановлена: "+error.Message;Log(oledNote);}}
@@ -313,9 +319,9 @@ internal sealed partial class G9ScreenEditor : UserControl {
     internal Task UploadCurrent() {return UploadFrame();}
     internal void StopLive() {live.Checked=false;transportEpoch++;uploadSerial++;uploading=false;upload.Enabled=transportAvailable;oledNote="Автообновление OLED приостановлено.";Render();}
     internal bool SuspendDevice(string reason) {
-        bool wasLive=live.Checked;transportEpoch++;uploadSerial++;uploading=false;runtimeStatus=null;
+        bool wasLive=live.Checked||displayOwnedThisRun;transportEpoch++;uploadSerial++;uploading=false;runtimeStatus=null;
         telemetry.Dispose();telemetry=new G9TelemetryReader();
-        transportAvailable=false;live.Checked=false;live.Enabled=false;upload.Enabled=false;
+        transportAvailable=false;bool previous=syncing;syncing=true;try{live.Checked=false;}finally{syncing=previous;}live.Enabled=false;upload.Enabled=false;
         oledNote=reason;Render();return wasLive;
     }
     internal void AllowDevice() {if(IsDisposed||disposedEditor)return;if(backgroundServicesEnabled)telemetry.Start();transportAvailable=true;live.Enabled=upload.Enabled=sendFrame!=null;}
@@ -323,6 +329,21 @@ internal sealed partial class G9ScreenEditor : UserControl {
         if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null)return;
         bool previous=syncing;syncing=true;try {live.Checked=true;}finally {syncing=previous;}
         await UploadFrame();
+    }
+    void SaveResumeFrame(){try{resumeFrame.Save(resumeFrameFile);}catch(Exception error){Log("Кадр отправлен, но его копия на ПК не сохранена: "+error.Message);}}
+    internal async Task ResumeDisplay() {
+        if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null||uploading)return;
+        if(resumeFrameInvalid){oledNote="Сохранённый кадр повреждён; отправьте макет вручную.";Render();return;}
+        if(!resumeFrame.HasFrame||resumeFrame.Live){await ResumeLive();return;}
+        int epoch=transportEpoch,operation=++uploadSerial;
+        byte[] pixels=resumeFrame.GetFrame();lastUploadError=null;uploading=true;upload.Enabled=false;
+        bool previous=syncing;syncing=true;try{live.Checked=false;}finally{syncing=previous;}
+        try{
+            string sent=await sendFrame(pixels);
+            if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;
+            displayOwnedThisRun=true;oledNote="Восстановлен последний переданный кадр. "+sent;Log(oledNote);
+        }catch(Exception error){if(epoch==transportEpoch&&!IsDisposed&&!disposedEditor){lastUploadError=error;oledNote="Восстановление OLED остановлено: "+error.Message;Log(oledNote);}}
+        finally{if(operation==uploadSerial){uploading=false;if(!IsDisposed&&!disposedEditor){upload.Enabled=transportAvailable;Render();}}}
     }
     void ChooseImage(){using(var dialog=new OpenFileDialog {Filter="Картинки|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff"})if(dialog.ShowDialog(this)==DialogResult.OK){project.ImageFile=dialog.FileName;if(project.Composition==CompositionMode.Widgets)project.Composition=project.Widgets.Count>0?CompositionMode.ImageAndWidgets:CompositionMode.Image;SyncControls(null,true);Changed();}}
     void SaveProject(){using(var dialog=new SaveFileDialog {Filter="Проект экрана|*.g9screen.json",FileName="screen.g9screen.json"})if(dialog.ShowDialog(this)==DialogResult.OK)try{ScreenWidget w=SelectedWidget();bool image=ImageSelected();project.Save(dialog.FileName);SyncControls(w,image);Log("Сохранён проект экрана: "+dialog.FileName);dirty=true;SaveAutosave();}catch(Exception e){MessageBox.Show(this,e.Message,"Сохранение проекта",MessageBoxButtons.OK,MessageBoxIcon.Error);}}

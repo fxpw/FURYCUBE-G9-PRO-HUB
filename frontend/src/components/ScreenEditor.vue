@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { t, locale, firmwareName } from "../i18n";
+import { t, locale, firmwareName, oledStatus } from "../i18n";
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { call, isDesktop } from "../bridge";
 import { busy, notify, run, state } from "../store";
@@ -44,9 +44,8 @@ const supportsUpload = computed(
   () =>
     isDesktop &&
     state.value.device.connected &&
-    /OL[45]/.test(state.value.device.firmware) &&
-    (state.value.device.connection !== "radio" ||
-      /OL5/.test(state.value.device.firmware)),
+    /OL[4-9](?:\D|$)/.test(state.value.device.firmware) &&
+    state.value.device.connection === "usb",
 );
 function hydrate(screen: ScreenState) {
   hydrating = true;
@@ -386,7 +385,7 @@ onBeforeUnmount(() => {
     <p>
       {{
         t(
-          "Загрузка OLED требует прошивки OL4 по USB или OL5 по USB / радио. Текущая:",
+          "Загрузка OLED сейчас доступна по USB с OL4 или OL5. Передача через приёмник временно отключена. Текущая:",
         )
       }}
       {{ firmwareName(state.device.firmware) || t("не определена")
@@ -496,7 +495,7 @@ onBeforeUnmount(() => {
           }}
         </p>
         <p v-if="state.screen.status" class="screen-status" role="status">
-          {{ state.screen.status }}
+          {{ oledStatus(state.screen.status) }}
         </p>
       </section>
       <section class="panel">

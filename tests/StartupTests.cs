@@ -44,11 +44,11 @@ internal static class StartupTests {
         const string wire="CAPS VID=1d57 PID=2148 version=0108 featureBytes=262 path="+wirePath+"\r\n";
         const string radio="CAPS VID=1d57 PID=fa60 version=0108 featureBytes=262 path="+radioPath+"\n";
         const string wireCommand="settings-read --pid 2148 --expected-path \""+wirePath+"\"";
-        const string radioCommand="mapping --active --pid fa60 --expected-path \""+radioPath+"\"";
+        const string radioCommand="settings-read --pid fa60 --expected-path \""+radioPath+"\"";
         var calls=new List<string>();var result=Read(wire,wireCommand,calls);
         Check(result.Wired&&result.Output=="snapshot payload"&&String.Join("|",calls)=="caps|"+wireCommand,"USB has one qualified exact-path full read and no second keymap read");
         calls.Clear();result=Read(radio,radioCommand,calls);
-        Check(!result.Wired&&calls.Count==2,"RF only reads qualified active mapping");
+        Check(!result.Wired&&calls.Count==2,"RF reads settings through exact receiver path without writes");
         calls.Clear();result=Read(radio+wire,wireCommand,calls);Check(result.Wired&&calls.Count==2,"cable preferred over simultaneously present receiver");
         foreach(string caps in new[]{"","CAPS ONLY: no feature reports requested or settings written.","TARGET VID=1d57 PID=2148 featureBytes=262","CAPS VID=1d57 PID=21480 path=fake","CAPS VID=other PID=2148 path=fake"}) {
             calls.Clear();Check(Read(caps,null,calls)==null&&calls.Count==1,"disconnected or nonmatching enumeration invokes no device query");

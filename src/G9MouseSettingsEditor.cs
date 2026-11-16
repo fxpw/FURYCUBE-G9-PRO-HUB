@@ -61,7 +61,7 @@ internal sealed class G9SettingsSnapshot {
         G9SettingsSnapshot result;
         try { result = new JavaScriptSerializer().Deserialize<G9SettingsSnapshot>(json); }
         catch (ArgumentException error) { throw new InvalidDataException("Повреждено описание настроек.", error); }
-        if (result == null || result.schemaVersion != 1 || result.source != "FirmwareLogicalProfile" ||
+        if (result == null || result.schemaVersion != 1 || (result.source != "FirmwareLogicalProfile" && result.source != "FirmwareSettingsRecords") ||
             result.profile < 1 || result.profile > 5 || result.activeProfile != result.profile ||
             result.maxProfiles < result.activeProfile || result.maxProfiles > 5 ||
             result.rawReports == null || result.fields == null || result.fields.Length > 40 ||
@@ -70,18 +70,26 @@ internal sealed class G9SettingsSnapshot {
         DateTime stamp;
         if (!DateTime.TryParse(result.readAtUtc, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out stamp))
             throw new InvalidDataException("Отсутствует время чтения настроек.");
-        string raw;
-        if (!result.rawReports.TryGetValue("allData", out raw)) throw new InvalidDataException("Отсутствует исходный ответ мыши.");
-        byte[] packet = Hex(raw, 120);
-        result.Model = MouseSettingsCodec.DecodeAllData(packet, result.profile);
-        byte[] body = Hex(result.fullBodyHex, 117);
-        for (int i = 0; i < body.Length; i++) if (body[i] != packet[i + 3]) throw new InvalidDataException("Тело профиля не совпадает с исходным ответом.");
+        byte[] body=null;
+        if(result.source=="FirmwareSettingsRecords") {
+            if(result.productId!=0xFA60||result.fullBodyHex!=null||result.rawReports.ContainsKey("allData"))throw new InvalidDataException("Набор коротких ответов не является полным телом профиля.");
+            if(result.rawReports.ContainsKey("light"))throw new InvalidDataException("Чтение питания через приёмник пока не подтверждено.");
+            result.Model=MouseSettingsCodec.DecodeSettingsRecords(result.profile,Record(result,"sensor",52),Record(result,"polling",9));
+            byte[] profileRaw=Record(result,"profile",8),beforeRaw=Record(result,"profileBefore",8);
+            for(int i=0;i<8;i++)if(profileRaw[i]!=beforeRaw[i])throw new InvalidDataException("Профиль изменился при чтении.");
+            if(profileRaw[0]!=12||profileRaw[1]!=8||profileRaw[2]!=1||profileRaw[3]!=result.activeProfile||profileRaw[5]!=result.maxProfiles||
+                (profileRaw[3]^profileRaw[4])!=255||(profileRaw[5]^profileRaw[6])!=255||profileRaw[7]!=0)throw new InvalidDataException("Неверные исходные данные профиля.");
+        } else {
+            byte[] packet=Record(result,"allData",120);result.Model=MouseSettingsCodec.DecodeAllData(packet,result.profile);
+            body=Hex(result.fullBodyHex,117);
+            for(int i=0;i<body.Length;i++)if(body[i]!=packet[i+3])throw new InvalidDataException("Тело профиля не совпадает с исходным ответом.");
+        }
         string rawKeys;
         if(!result.rawReports.TryGetValue("keys",out rawKeys))throw new InvalidDataException("Отсутствует полная таблица кнопок.");
         result.Keys=Hex(rawKeys,59);
         if(result.Keys[0]!=8 || result.Keys[1]!=59 || result.Keys[2]!=result.profile)throw new InvalidDataException("Неверный профиль таблицы кнопок.");
-        int keySum=0;for(int i=0;i<54;i++){keySum+=result.Keys[3+i];if(result.Keys[3+i]!=body[62+i])throw new InvalidDataException("Таблица кнопок расходится с профилем.");}
-        if(keySum!=(result.Keys[57]<<8|result.Keys[58]) || result.Keys[58]!=body[116])throw new InvalidDataException("Неверная контрольная сумма кнопок.");
+        int keySum=0;for(int i=0;i<54;i++){keySum+=result.Keys[3+i];if(body!=null&&result.Keys[3+i]!=body[62+i])throw new InvalidDataException("Таблица кнопок расходится с профилем.");}
+        if(keySum!=(result.Keys[57]<<8|result.Keys[58]) || body!=null&&result.Keys[58]!=body[116])throw new InvalidDataException("Неверная контрольная сумма кнопок.");
         var expected = MouseSettingsCodec.GetFields(result.Model);
         var actual = new Dictionary<string,G9SettingsField>(StringComparer.Ordinal);
         foreach (var field in result.fields) {
@@ -117,6 +125,10 @@ internal sealed class G9SettingsSnapshot {
         if (applied && (!result.verified || String.IsNullOrEmpty(result.changedField) || String.IsNullOrEmpty(result.backupPath)))
             throw new InvalidDataException("Запись не подтверждена чтением или не сохранена копия.");
         return result;
+    }
+    static byte[] Record(G9SettingsSnapshot snapshot,string name,int length) {
+        string raw;if(!snapshot.rawReports.TryGetValue(name,out raw))throw new InvalidDataException("Отсутствует исходный ответ мыши: "+name);
+        return Hex(raw,length);
     }
     internal static byte[] Hex(string value, int length) {
         if (value == null || value.Length != length * 2) throw new InvalidDataException("Неверный размер исходного пакета.");

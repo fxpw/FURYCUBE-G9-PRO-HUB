@@ -45,10 +45,11 @@ internal sealed class G9SettingsSnapshot {
                 canWrite=field.CanWrite,unsupportedReason=field.UnsupportedReason});
         }
         return new Dictionary<string,object> {
-            {"schemaVersion",1},{"source","FirmwareLogicalProfile"},{"devicePath",DevicePath},
+            {"schemaVersion",1},{"source",Model.SourceKind.ToString()},{"devicePath",DevicePath},
             {"productId",(int)ProductId},{"productIdHex",ProductId.ToString("x4",CultureInfo.InvariantCulture)},{"profile",Model.ProfileId},
             {"activeProfile",ActiveProfile},{"maxProfiles",MaxProfiles},{"readAtUtc",ReadAtUtc},
-            {"fullBodyHex",G9Wire.Hex(Model.GetBodyCopy())},{"rawReports",raw},{"fields",fields.ToArray()},
+            {"fullBodyHex",Model.IsCompleteProfile?G9Wire.Hex(Model.GetBodyCopy()):null},{"completeProfile",Model.IsCompleteProfile},
+            {"verificationScope",Model.IsCompleteProfile?"logical-profile":"settings-records"},{"rawReports",raw},{"fields",fields.ToArray()},
             {"archivePath",ArchivePath},{"verified",true},{"isFirmwareBackup",false},{"macroBodiesIncluded",false}
         };
     }
@@ -57,9 +58,9 @@ internal sealed class G9SettingsSnapshot {
 internal static class G9SettingsTransactions {
     static readonly UTF8Encoding Utf8=new UTF8Encoding(false);
     static void Require(bool value,string message) { if(!value) throw new InvalidDataException(message); }
-    static void Session(IG9SettingsSession session) {
+    static void Session(IG9SettingsSession session,bool wiredOnly=false) {
         if(session==null) throw new ArgumentNullException("session");
-        Require(session.SettingsProductId==0x2148,"Full settings currently require the wired G9 1D57:2148 interface; receiver long-read framing is not qualified.");
+        Require(session.SettingsProductId==0x2148||!wiredOnly&&session.SettingsProductId==0xFA60,"Unsupported settings interface; this operation requires a qualified G9 transport.");
         Require(!String.IsNullOrEmpty(session.SettingsDevicePath),"Missing settings device identity");
     }
     static byte[] Profile(IG9SettingsSession session,out byte[] raw) {
@@ -92,7 +93,7 @@ internal static class G9SettingsTransactions {
         string name="settings-"+DateTime.UtcNow.ToString("yyyyMMdd'T'HHmmssfffffff'Z'",CultureInfo.InvariantCulture)+
             "-"+snapshot.ProductId.ToString("x4")+"-profile"+snapshot.Model.ProfileId+"-"+Guid.NewGuid().ToString("N");
         string directory=Path.Combine(root,name); Directory.CreateDirectory(directory);
-        WriteNew(Path.Combine(directory,"logical-profile-117.bin"),snapshot.Model.GetBodyCopy());
+        if(snapshot.Model.IsCompleteProfile)WriteNew(Path.Combine(directory,"logical-profile-117.bin"),snapshot.Model.GetBodyCopy());
         foreach(var report in snapshot.Reports) WriteNew(Path.Combine(directory,report.Key+".bin"),report.Value);
         snapshot.ArchivePath=Path.Combine(directory,"snapshot.json");
         WriteNew(snapshot.ArchivePath,Utf8.GetBytes(new JavaScriptSerializer().Serialize(snapshot.ToDto())));
@@ -103,6 +104,7 @@ internal static class G9SettingsTransactions {
         byte[] profileBeforeRaw; byte[] profileBefore=Profile(session,out profileBeforeRaw);
         int profile=profileBefore[0];
         Require(!expectedProfile.HasValue || expectedProfile.Value==profile,"The requested profile is not currently active; select it explicitly before editing.");
+        if(session.SettingsProductId==0xFA60)return ReadRadioRecords(session,profileBeforeRaw,profileBefore,backupRoot);
         byte[] all=session.QuerySettings(0x0A,profile); MouseSettingsProfile model=MouseSettingsCodec.DecodeAllData(all,profile);
         byte[] sensor=session.QuerySettings(4,profile); MouseSettingsCodec.ValidateSensorMatches(model,sensor);
         byte[] polling=session.QuerySettings(6,profile); MouseSettingsCodec.ValidatePollingMatches(model,polling);
@@ -118,6 +120,22 @@ internal static class G9SettingsTransactions {
         };
         var snapshot=new G9SettingsSnapshot(finalModel,profile,profileAfter[1],session,reports);
         Archive(snapshot,backupRoot); return snapshot;
+    }
+    static G9SettingsSnapshot ReadRadioRecords(IG9SettingsSession session,byte[] beforeRaw,byte[] before,string backupRoot) {
+        int profile=before[0];string path=session.SettingsDevicePath;
+        byte[] sensor=session.QuerySettings(4,profile),polling=session.QuerySettings(6,profile);
+        var model=MouseSettingsCodec.DecodeSettingsRecords(profile,sensor,polling);
+        byte[] rf=session.QuerySettings(7,profile);ValidateRf(rf,profile,profile);
+        byte[] keys=G9Wire.DecodeKeys(session.QuerySettings(8,profile),profile);
+        // A second independent read checks every editable body and key table;
+        // no GET0A or fabricated alignment/key-checksum bytes are involved.
+        var final=MouseSettingsCodec.DecodeSettingsRecords(profile,session.QuerySettings(4,profile),session.QuerySettings(6,profile));
+        Require(MouseSettingsCodec.SameSettings(model,final),"Settings records changed during the radio read");
+        Require(G9Wire.Equal(keys,G9Wire.DecodeKeys(session.QuerySettings(8,profile),profile)),"Key table changed during the radio read");
+        byte[] afterRaw;byte[] after=Profile(session,out afterRaw);SameProfile(before,after);
+        Require(session.SettingsProductId==0xFA60&&String.Equals(path,session.SettingsDevicePath,StringComparison.OrdinalIgnoreCase),"Radio device identity changed during the read");
+        var records=new Dictionary<string,byte[]> {{"sensor",sensor},{"polling",polling},{"rf",rf},{"keys",keys},{"profile",afterRaw},{"profileBefore",beforeRaw}};
+        var snapshot=new G9SettingsSnapshot(model,profile,after[1],session,records);Archive(snapshot,backupRoot);return snapshot;
     }
     static int ParseProfileValue(string value) {
         int parsed; if(!Int32.TryParse(value,NumberStyles.None,CultureInfo.InvariantCulture,out parsed)) throw new ArgumentException("Profile value must be an integer1..5");
@@ -204,7 +222,7 @@ internal static class G9SettingsTransactions {
         return new SavedProfilePair{SnapshotPath=path,SnapshotHash=hash,DevicePath=devicePath,Raw=raw,Pair=pair};
     }
     static void SameRestoreTarget(IG9SettingsSession session,string expectedDevicePath) {
-        Session(session);Require(String.Equals(session.SettingsDevicePath,expectedDevicePath,StringComparison.OrdinalIgnoreCase),"Saved profile pair belongs to a different device path; no write permitted");
+        Session(session,true);Require(String.Equals(session.SettingsDevicePath,expectedDevicePath,StringComparison.OrdinalIgnoreCase),"Saved profile pair belongs to a different device path; no write permitted");
     }
     static string ArchiveProfilePair(IG9SettingsSession session,byte[] currentRaw,SavedProfilePair saved,string backupRoot) {
         if(String.IsNullOrWhiteSpace(backupRoot))throw new ArgumentException("A durable backup directory is required.","backupRoot");
@@ -226,7 +244,7 @@ internal static class G9SettingsTransactions {
         Require(File.Exists(archive),"Profile-pair backup was not saved; no write permitted");return archive;
     }
     internal static Dictionary<string,object> RestoreProfilePair(IG9SettingsSession session,string snapshotFile,string backupRoot) {
-        Session(session);SavedProfilePair saved=ReadSavedProfilePair(snapshotFile);
+        Session(session,true);SavedProfilePair saved=ReadSavedProfilePair(snapshotFile);
         SameRestoreTarget(session,saved.DevicePath);
         byte[] currentRaw;Profile(session,out currentRaw);byte[] current=StrictProfilePair(currentRaw);
         SameRestoreTarget(session,saved.DevicePath);
@@ -252,6 +270,7 @@ internal static class G9SettingsTransactions {
     internal static Dictionary<string,object> Apply(IG9SettingsSession session,int? expectedProfile,string field,string value,string backupRoot) {
         if(String.IsNullOrEmpty(field) || value==null) throw new ArgumentException("A field and value are required.");
         G9SettingsSnapshot before=Read(session,expectedProfile,backupRoot);
+        ushort product=session.SettingsProductId;string devicePath=session.SettingsDevicePath;
         byte[] packet; MouseSettingsEdit edit=null; int afterProfile=before.ActiveProfile,afterMaximum=before.MaxProfiles;
         if(field=="active-profile") {
             afterProfile=ParseProfileValue(value);
@@ -269,12 +288,14 @@ internal static class G9SettingsTransactions {
         Require(File.Exists(before.ArchivePath),"Settings backup was not saved; write stopped.");
         byte[] freshProfileRaw; byte[] freshProfile=Profile(session,out freshProfileRaw);
         SameProfile(new byte[]{(byte)before.ActiveProfile,(byte)before.MaxProfiles},freshProfile);
+        Require(session.SettingsProductId==product&&String.Equals(devicePath,session.SettingsDevicePath,StringComparison.OrdinalIgnoreCase),"Settings device changed before SET");
         G9Wire.ValidateSend(packet); session.SendSettings(packet);
         G9SettingsSnapshot after=Read(session,afterProfile,backupRoot);
         Require(after.ActiveProfile==afterProfile && after.MaxProfiles==afterMaximum,"Profile setting readback differs from the requested state");
-        if(edit!=null) Require(G9Wire.Equal(after.Model.GetBodyCopy(),edit.Updated.GetBodyCopy()),
+        Require(after.ProductId==product&&String.Equals(after.DevicePath,devicePath,StringComparison.OrdinalIgnoreCase),"Settings device changed during readback");
+        if(edit!=null) Require(MouseSettingsCodec.SameSettings(after.Model,edit.Updated)&&G9Wire.Equal(before.Reports["keys"],after.Reports["keys"]),
             "Settings readback differs from the requested field-preserving edit; operation stopped without retry or reset.");
-        else if(field=="max-profiles") Require(G9Wire.Equal(before.Model.GetBodyCopy(),after.Model.GetBodyCopy()),
+        else if(field=="max-profiles") Require(MouseSettingsCodec.SameSettings(before.Model,after.Model)&&G9Wire.Equal(before.Reports["keys"],after.Reports["keys"]),
             "Changing the profile count unexpectedly changed the profile body");
         var result=after.ToDto(); result["changedField"]=field; result["backupPath"]=before.ArchivePath;
         result["writePacketHex"]=G9Wire.Hex(packet); result["verified"]=true; return result;

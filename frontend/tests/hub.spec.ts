@@ -383,23 +383,99 @@ test("OLED debounces native previews and flushes latest Pascal DTO before upload
   expect(sent.at(-1).method).toBe("screen.upload");
 });
 
-test("OL4 radio permits editor but blocks unqualified OLED upload", async ({
+test("radio settings allow qualified edits and show unknown power without invented zero", async ({
   page,
 }) => {
   await desktop(page);
   await page.evaluate(() => {
     const n = (window as any).__native;
     n.state.device.connection = "radio";
-    n.state.device.firmware = "1.08 / OL4";
+    n.state.settings.fields.push({
+      id: "sleep.idleMinutes",
+      name: "Таймер режима ожидания",
+      type: "integer",
+      value: null,
+      unit: "мин",
+      min: 1,
+      max: 60,
+      step: 1,
+      options: [],
+      canWrite: false,
+      unsupportedReason: "Нет достоверного исходного значения.",
+    });
     (window as any).__pushState();
   });
-  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "На OLED", exact: true }),
-  ).toBeDisabled();
-  await expect(page.getByText(/Загрузка OLED требует прошивки/)).toBeVisible();
-  expect(await requests(page, "screen.upload")).toHaveLength(0);
+  await page.getByRole("button", { name: "DPI и сенсор", exact: true }).click();
+  const dpi = page.locator('input[type="number"][aria-label="DPI: уровень 1"]');
+  await expect(dpi).toBeEnabled();
+  await dpi.fill("3200");
+  await dpi.blur();
+  await page.getByRole("button", { name: "Применить 1", exact: true }).click();
+  expect((await requests(page, "device.settings"))[0].payload.changes).toEqual([
+    { id: "dpi.value1", value: "3200" },
+  ]);
+  await page.getByRole("tab", { name: "Питание", exact: true }).click();
+  await expect(page.locator(".settings-grid")).toContainText(
+    "Нет достоверного исходного значения.",
+  );
+  await expect(page.locator('.settings-grid input[type="number"]')).toHaveCount(
+    0,
+  );
+  await expect(page.locator(".settings-grid")).toContainText("—");
+  await page.locator(".language-control select").selectOption("en");
+  await expect(page.locator(".notice")).toContainText(
+    "Connect USB for power timers and debounce.",
+  );
 });
+
+for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OL9"]) {
+  test(`${revision} radio permits editor but blocks unqualified OLED upload and live`, async ({
+    page,
+  }) => {
+    await desktop(page);
+    await page.evaluate((revision) => {
+      const n = (window as any).__native;
+      n.state.device.connection = "radio";
+      n.state.device.firmware = `1.08 / ${revision}`;
+      (window as any).__pushState();
+    }, revision);
+    await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "На OLED", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      page.getByLabel("Обновлять в реальном времени"),
+    ).toBeDisabled();
+    await expect(
+      page.getByText(/Передача через приёмник временно отключена/),
+    ).toBeVisible();
+    await page.locator(".language-control select").selectOption("en");
+    await expect(
+      page.getByText(/Receiver transfers are temporarily disabled/),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Upload to OLED", exact: true }),
+    ).toBeDisabled();
+    expect(await requests(page, "screen.upload")).toHaveLength(0);
+  });
+}
+
+for (const revision of ["OL7", "OL8", "OL9"]) {
+  test(`${revision} USB permits a guarded control upload without enabling radio`, async ({
+    page,
+  }) => {
+    await desktop(page);
+    await page.evaluate((revision) => {
+      (window as any).__native.state.device.firmware = `1.08 / ${revision}`;
+      (window as any).__pushState();
+    }, revision);
+    await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "На OLED", exact: true }),
+    ).toBeEnabled();
+    expect(await requests(page, "screen.upload")).toHaveLength(0);
+  });
+}
 
 test("local macro save uses portable lowercamel schema and leaves upload unavailable", async ({
   page,
@@ -643,6 +719,27 @@ test("English translates native action catalog and setting metadata without rena
   expect(
     localeRequests.some((request: any) => request.payload.locale === "en"),
   ).toBe(true);
+});
+
+test("last-frame restore status translates without changing timestamp or counters", async ({
+  page,
+}) => {
+  await desktop(page);
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  await page.evaluate(() => {
+    (window as any).__native.state.screen.status =
+      "Восстановлен последний переданный кадр. Кадров отправлено: 2 · 19:40:12";
+    (window as any).__pushState();
+  });
+  await page.locator(".language-control select").selectOption("en");
+  await expect(page.locator(".screen-status")).toHaveText(
+    "Last submitted frame restored. Frames sent: 2 · 19:40:12",
+  );
+  await page.locator(".language-control select").selectOption("ru");
+  await expect(page.locator(".screen-status")).toHaveText(
+    "Восстановлен последний переданный кадр. Кадров отправлено: 2 · 19:40:12",
+  );
+  expect(await requests(page, "screen.upload")).toHaveLength(0);
 });
 
 test("language changes retain unsaved settings and screen geometry/text drafts", async ({

@@ -285,7 +285,7 @@ class MouseEndpointFixture(FlowFixture):
         self.poll_input()
 
 
-def run_mouse_ready_regressions(code, layout, candidate_image=None):
+def run_mouse_ready_regressions(code, layout, candidate_image=None, protected_reports=(0x22,)):
     checks = 0
     for buttons, dx, dy, protocol in ((b, x, y, p) for b, x, y in
                                      ((1, 3, -2), (2, -4, 5), (3, 0, 0), (0, 0, 0))
@@ -374,7 +374,7 @@ def run_mouse_ready_regressions(code, layout, candidate_image=None):
             for reg, value in values.items():
                 fixture.uc.reg_write(reg, value)
             fixture.run(target)
-            assert fixture.get8(0x400B23) == (ready if report == 0x22 else 1)
+            assert fixture.get8(0x400B23) == (ready if report in protected_reports else 1)
             assert fixture.uc.reg_read(UC_ARM_REG_R2) == 37
             assert all(fixture.uc.reg_read(reg) == value for reg, value in values.items())
             checks += 1

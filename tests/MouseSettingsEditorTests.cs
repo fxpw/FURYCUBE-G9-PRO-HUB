@@ -26,8 +26,10 @@ internal static class MouseSettingsEditorTests {
         Buffer.BlockCopy(light,3,result,55,8);result[63]=light[12];result[64]=light[11];
         Buffer.BlockCopy(keys,3,result,65,54);result[119]=keys[58];return result;
     }
-    static Dictionary<string,object> Document(byte[] packet,bool applied) {
-        var model=MouseSettingsCodec.DecodeAllData(packet,packet[2]);
+    static Dictionary<string,object> Document(byte[] packet,bool applied,bool radio=false) {
+        var full=MouseSettingsCodec.DecodeAllData(packet,packet[2]);
+        var sensor=new byte[52];Buffer.BlockCopy(MouseSettingsCodec.BuildSetPacket(full,4),0,sensor,0,52);sensor[1]=52;
+        var model=radio?MouseSettingsCodec.DecodeSettingsRecords(packet[2],sensor,MouseSettingsCodec.BuildSetPacket(full,6)):full;
         var keys=new byte[59];keys[0]=8;keys[1]=59;keys[2]=packet[2];Buffer.BlockCopy(packet,65,keys,3,54);
         int sum=0;for(int i=3;i<57;i++)sum+=keys[i];keys[57]=(byte)(sum>>8);keys[58]=(byte)sum;
         var fields=new List<object>();
@@ -35,11 +37,17 @@ internal static class MouseSettingsEditorTests {
             id=f.Id,name=f.Name,type=f.Type,value=f.Value,unit=f.Unit,min=f.Min==0&&f.Max==0?(int?)null:f.Min,max=f.Min==0&&f.Max==0?(int?)null:f.Max,step=f.Step==0?(int?)null:f.Step,canWrite=f.CanWrite,unsupportedReason=f.UnsupportedReason,
             options=f.Options.Select(o=>new G9SettingsOption {value=o.Value,name=o.Name}).ToArray()});
         foreach(string global in new[]{"active-profile","max-profiles"})fields.Add(new G9SettingsField {id=global,value=(global=="active-profile"?packet[2]:5).ToString(CultureInfo.InvariantCulture),type="integer",min=1,max=5,step=1,canWrite=true});
+        var records=new Dictionary<string,string>{{"keys",Text(keys)}};
+        if(radio) {
+            records.Add("sensor",Text(sensor));records.Add("polling",Text(MouseSettingsCodec.BuildSetPacket(full,6)));
+            var profile=new byte[]{12,8,1,packet[2],(byte)(packet[2]^255),5,250,0};
+            records.Add("profile",Text(profile));records.Add("profileBefore",Text(profile));
+        }else records.Add("allData",Text(packet));
         return new Dictionary<string,object> {
-            {"schemaVersion",1},{"source","FirmwareLogicalProfile"},{"devicePath","offline fixture"},{"productId",0x2148},
+            {"schemaVersion",1},{"source",model.SourceKind.ToString()},{"devicePath","offline fixture"},{"productId",radio?0xFA60:0x2148},
             {"profile",(int)packet[2]},{"activeProfile",(int)packet[2]},{"maxProfiles",5},{"readAtUtc","2026-11-09T06:00:00Z"},
-            {"fullBodyHex",Text(model.GetBodyCopy())},{"rawReports",new Dictionary<string,string>{{"allData",Text(packet)},{"keys",Text(keys)}}},{"fields",fields.ToArray()},
-            {"archivePath","offline-only"},{"verified",applied},{"changedField",applied?"debounce.ms":null},{"backupPath",applied?"offline-backup":null}};
+            {"fullBodyHex",radio?null:Text(model.GetBodyCopy())},{"rawReports",records},{"fields",fields.ToArray()},
+            {"archivePath","offline-only"},{"verified",applied},{"changedField",applied?(radio?"polling.hz":"debounce.ms"):null},{"backupPath",applied?"offline-backup":null}};
     }
     static string Output(Dictionary<string,object> data,bool applied) {return (applied?"SETTINGS_APPLIED_JSON ":"SETTINGS_JSON ")+Json.Serialize(data)+"\r\n";}
     static G9SettingsSnapshot Snapshot(byte[] packet) {return G9SettingsSnapshot.Parse(Output(Document(packet,false),false),false);}
@@ -64,6 +72,20 @@ internal static class MouseSettingsEditorTests {
         Reject(delegate{G9SettingsSnapshot.Parse(Output(document,true),true);},"write without archived baseline rejected");
         Reject(delegate{G9SettingsSnapshot.Parse(Output(Document(packet,false),false)+Output(Document(packet,false),false),false);},"two snapshots rejected");
         for(int profile=2;profile<=5;profile++){packet[2]=(byte)profile;Check(Snapshot(packet).profile==profile,"settings profile "+profile+" is explicit");}
+        packet=Fixture();document=Document(packet,false,true);parsed=G9SettingsSnapshot.Parse(Output(document,false),false);
+        Check(parsed.productId==0xFA60&&parsed.Model.IsDeviceReadback&&!parsed.Model.IsCompleteProfile,"radio records parsed without fabricating profile body");
+        Check(parsed.fields.First(f=>f.id=="dpi.value1").canWrite&&parsed.fields.First(f=>f.id=="polling.hz").canWrite,"radio editable records accepted");
+        foreach(string id in new[]{"sleep.idleMinutes","sleep.level1Seconds","debounce.ms"})Check(!parsed.fields.First(f=>f.id==id).canWrite&&parsed.fields.First(f=>f.id==id).value==null,"radio power stays unknown "+id);
+        Check(G9MouseSettingsEditor.PrepareEdits(parsed,new Dictionary<string,string>{{"polling.hz","500"}}).Count==1,"radio native preflight accepts qualified edit");
+        Reject(delegate{G9MouseSettingsEditor.PrepareEdits(parsed,new Dictionary<string,string>{{"debounce.ms","16"}});},"radio native preflight rejects missing power baseline");
+        foreach(string name in new[]{"sensor","polling","keys","profile","profileBefore"}) {
+            document=Document(packet,false,true);((Dictionary<string,string>)document["rawReports"]).Remove(name);
+            Reject(delegate{G9SettingsSnapshot.Parse(Output(document,false),false);},"radio missing record "+name);
+        }
+        document=Document(packet,false,true);document["fullBodyHex"]=new string('0',234);Reject(delegate{G9SettingsSnapshot.Parse(Output(document,false),false);},"radio invented body rejected");
+        document=Document(packet,false,true);document["productId"]=0x2148;Reject(delegate{G9SettingsSnapshot.Parse(Output(document,false),false);},"records provenance restricted to receiver");
+        document=Document(packet,false,true);((Dictionary<string,string>)document["rawReports"])["light"]=Light;Reject(delegate{G9SettingsSnapshot.Parse(Output(document,false),false);},"radio invented power record rejected");
+        document=Document(packet,false,true);var raw=(Dictionary<string,string>)document["rawReports"];raw["profileBefore"]="0c080102fd05fa00";Reject(delegate{G9SettingsSnapshot.Parse(Output(document,false),false);},"radio profile drift rejected");
     }
     static void Preflight() {
         var before=Snapshot(Fixture());

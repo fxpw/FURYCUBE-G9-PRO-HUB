@@ -19,16 +19,29 @@ identified development mouse, not every device sold under the same name.
 | --- | --- |
 | Onboard button assignments | The ordinary-key fix was confirmed over USB and 2.4 GHz with the HUB closed. Assignments use guarded writes and readback. |
 | DPI, sensor and power settings | Complete wired reads and a timer write/restore were physically checked. Other setters have offline coverage. |
-| Settings over 2.4 GHz | Incomplete in this client. The stock HUB supports radio configuration, but our profile/long-report read path still needs correction. |
+| Settings over 2.4 GHz | Sensor/DPI, polling, buttons and profile reads match the USB baseline. Polling-setting writes passed CLI and Vue checks, with restoration to the original value. Other setters need individual checks; power timers/debounce still need USB. See [radio settings](docs/RADIO-SETTINGS.md). |
 | Custom OLED on OL4 | USB frames, numeric DPI and live clock/system widgets were confirmed while ordinary mouse input continued working. |
-| Radio OLED and retained last frame | OL5 source has offline regression coverage only. No OL5 updater candidate is prepared or installed. |
+| OL5 OLED and retained last frame | Installed on the development mouse; USB image and continued input were confirmed. The radio image did not appear and later configuration reads timed out, so receiver OLED is disabled in the native client and UI. Unplugging only USB with the switch already at 2.4 GHz loses the image. |
+| OL6 carrier experiment | Earlier installation introduced a separate experimental client. The owner confirmed radio input but reported missing USB mouse input. It was superseded by OL7 before any image upload. |
+| OL7 USB input guard | Currently installed. The owner confirms USB input after Windows restart; settings match the saved profile. The next radio attempt timed out on ordinary GET0C before sending an image; receiver restart returned3010. |
+| OL8 / OL9 candidates | Separate context-kind and checksum hypotheses have passed complete offline checks and exact updater packaging. Neither is installed. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
+| PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
 | Firmware recovery | Configuration backups exist; a complete installed-firmware dump and independent rollback remain unverified. |
 
 An earlier OLED session lost mouse input and required a Windows reboot. The
-current 708-byte OL4 extension includes an endpoint-readiness guard and passed
+708-byte OL4 extension included an endpoint-readiness guard and passed
 bounded post-reboot checks; the complete cause of the earlier persistent failure
-has not been isolated. No automatic firmware installation is performed.
+has not been isolated. The later OL5 experiment preserves that guard and passed
+an ordinary-input and single-USB-frame check. The HUB does not install firmware
+automatically.
+
+The next hardware milestone is an ordinary working radio configuration read,
+then a visible control image. The PC-side frame cache and reconnect path are
+implemented, while ordinary receiver OLED remains disabled pending end-to-end
+qualification. No OL6/OL7 image has been sent. The brief screen change reported
+at startup has not been identified as host traffic or a firmware redraw.
+See [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
 
 ## Build and run
 
@@ -89,8 +102,9 @@ all values and intermediate DPI states before writing. A multi-field save is
 sequential: a failure stops later writes, while earlier changes may already have
 been saved. Invalid or stale replies are rejected instead of becoming defaults.
 
-The current complete-settings path requires USB. Radio configuration remains a
-client limitation under investigation. LOD, Motion Sync, body lighting and RF
+The complete-settings path requires USB. Radio reads expose supported DPI,
+sensor, polling, button and profile records; power timers and debounce still need
+USB. LOD, Motion Sync, body lighting and RF
 power show their availability limits rather than offering unverified controls.
 See the [settings inventory](docs/SETTINGS-PARITY.md) and
 [readback protocol](docs/READ-HANDSHAKE.md).
@@ -124,10 +138,11 @@ Portable examples:
 | [Clock, DPI and system](examples/screens/clock-dpi-system.g9screen.json) | Clock, numeric DPI, CPU and RAM |
 | [Positioned image](examples/screens/positioned-image.g9screen.json) | An 84 × 20 image at X=18, Y=4, with its bundled asset |
 
-**Physically verified OLED upload currently requires OL4 and USB.** Stock
+**Physically verified OLED upload currently covers OL4 and OL5 over USB.** Stock
 firmware does not advertise the extension; native OL2/OL3 image writes are blocked
-because their long-packet assembly failure was reproduced. Radio OLED support in
-OL5 remains an offline prototype, not a completed device feature.
+because their long-packet assembly failure was reproduced. Receiver OLED upload/live is currently
+disabled after a failed delivery test; image submission to Windows alone did
+not establish forwarding by the receiver. Connect the mouse by USB for OLED.
 
 On current OL4, native redraws, sleep and connection changes can replace or clear
 a custom image. Keeping the last frame across modes or power loss is not yet
@@ -161,7 +176,9 @@ language.
 
 Settings also contains **Start HUB with Windows** and **Resume OLED updates at
 startup**. Both require an explicit choice. Resume starts only after the device
-has been checked; it does not apply a saved mouse profile. Closing or minimizing
+has been checked; it does not apply a saved mouse profile. A saved static frame
+restores as static, while saved live mode resumes rendering. A cache from an
+earlier process does not start traffic until startup resume is enabled. Closing or minimizing
 the window hides it in the tray; use **Quit HUB** or the tray's **Exit** to stop it.
 
 Local data is stored under `%LOCALAPPDATA%\FURYCUBE-G9-PRO`:
@@ -171,6 +188,7 @@ Local data is stored under `%LOCALAPPDATA%\FURYCUBE-G9-PRO`:
 | `backups` | Logical settings snapshots, button tables and raw configuration replies |
 | `profiles` | Portable settings presets; deleted files go to `.deleted` |
 | `editor` | OLED autosave, image assets and local macro library |
+| `editor/*.last-frame` | Last successful host-submitted frame and static/live mode, with atomic replacement and checksum |
 | `hub-background.json` | Background-resume preference |
 
 Configuration snapshots are **not firmware backups** and do not contain the

@@ -121,7 +121,7 @@ def direct_byte_calls(original):
     return found
 
 
-def run_regressions(code,layout,candidate_image=None):
+def run_regressions(code,layout,candidate_image=None,radio_fixture_factory=None,radio_status_supported=True):
     f=NativeFixture(code,layout,candidate_image)
     original=(ROOT/'evidence/g9pro-firmware-normalized.bin').read_bytes()
     calls=direct_byte_calls(original)
@@ -210,6 +210,26 @@ def run_regressions(code,layout,candidate_image=None):
         if off:
             policy.clear_trace();policy.tick();assert not policy.transactions
         upload_policy_cases+=1
+    # Sleep may begin after the first eleven chunks, before the final SET
+    # reaches the commit hook. Native wake skips panel initialization while
+    # AF1 is set. A prior initialization earlier this boot is not proof that
+    # the sleeping panel was reinitialized now.
+    sleep_commit_policy_cases=0
+    for initialized_before in (0,1):
+        for native_init_suppressed in (0,1):
+            policy=NativeFixture(code,layout,candidate_image)
+            for index in range(11):
+                page,x=divmod(index,3)
+                policy.direct_chunk(chunk_packet(page,x*40,frame_a[index*40:(index+1)*40],int(index==0)))
+            policy.set8(policy.meta()+19,initialized_before)
+            policy.set8(0x400A7A,1);policy.set8(0x400AF1,native_init_suppressed);policy.set8(0x400AF2,0)
+            policy.direct_chunk(chunk_packet(3,80,frame_a[440:480]))
+            assert policy.active_frame()==frame_a and policy.display_init_calls==1,(initialized_before,native_init_suppressed,policy.display_init_calls)
+            assert policy.get8(policy.meta()+19)==1 and policy.get8(0x400A7A)==0
+            assert policy.get8(policy.meta()+6)==1
+            policy.clear_trace();policy.tick()
+            assert policy.transactions[-1]==bytes([0x78,0x40])+frame_a[:40]
+            sleep_commit_policy_cases+=1
     # Sleep and physical OLED-off flags never cause a renderer wake or GPIO.
     sleep_cases=0
     for flag in (0x400A7A,0x400AF2):
@@ -281,7 +301,7 @@ def run_regressions(code,layout,candidate_image=None):
         assert f.transactions[-1]==bytes([0x78,0x40])+frame_b[index*40:(index+1)*40]
     # Full RF prefix/ACK and30/30/2 reassembly now feeds the same native
     # complete-frame store and budgeted renderer, including sleeping wake.
-    radio=NativeRadioFixture(code,layout,candidate_image)
+    radio=(radio_fixture_factory or NativeRadioFixture)(code,layout,candidate_image)
     radio.set8(0x400A7A,1);radio.set8(0x400B23,0);radio.set8(0x400B22,1)
     radio.upload(frame_a)
     assert radio.active_frame()==frame_a and radio.display_init_calls==1
@@ -290,13 +310,15 @@ def run_regressions(code,layout,candidate_image=None):
     for index in range(12):
         radio.tick()
         assert radio.transactions[-1]==bytes([0x78,0x40])+frame_a[index*40:(index+1)*40]
-    assert radio.read()==expected_status(0)
+    if radio_status_supported:
+        assert radio.read()==expected_status(0)
     assert radio.active_frame()==frame_a and not radio.flash_writes and not radio.profile_loads
     assert not f.flash_writes and not f.profile_loads
     return dict(native_pixel_gate_cases=gate_cases,unchanged_command_calls=len(unchanged_calls),
                 framebuffer_ticks=12,tick_instruction_counts=ticks,
                 sleep_off_cases=sleep_cases,main_loop_sites=main_cases,
                 native_dirty_cases=native_dirty_cases,upload_policy_cases=upload_policy_cases,
+                sleep_commit_policy_cases=sleep_commit_policy_cases,
                 malformed_chunks=malformed_cases,warm_combined_reset=True,input_checks=input_checks,
                 native_rf_full_frame=True,native_rf_sleep_init_once=True,
                 no_per_frame_nvm=True,physical_sram_retention=False)

@@ -13,9 +13,9 @@ namespace Furycube.G9.Oled {
         public int Pages { get { return 4; } }
         public int BufferBytes { get { return 480; } }
         public string Extension { get; private set; }
-        public bool SupportsRuntimeStatus { get { return Extension == "OL3" || Extension == "OL4" || Extension == "OL5"; } }
-        public bool SupportsShortWrites { get { return Extension == "OL4" || Extension == "OL5"; } }
-        public bool SupportsRadioWrites { get { return Extension == "OL5"; } }
+        public bool SupportsRuntimeStatus { get { return Extension == "OL3" || SupportsShortWrites; } }
+        public bool SupportsShortWrites { get { return Extension == "OL4" || SupportsRadioWrites; } }
+        public bool SupportsRadioWrites { get { return Extension == "OL5" || Extension == "OL6" || Extension == "OL7" || Extension == "OL8" || Extension == "OL9"; } }
         internal FirmwareCapabilities(byte major, byte minor, string extension) { VersionMajor = major; VersionMinor = minor; Extension = extension; }
     }
 
@@ -34,7 +34,7 @@ namespace Furycube.G9.Oled {
         public static FirmwareCapabilities DecodeFirmwareCapabilities(byte[] reply, byte? expectedMajor = 1, byte? expectedMinor = 8) {
             Require(reply != null && reply.Length == 8 && reply[0] == 0x0B && (reply[1] == 5 || reply[1] == 8) && reply[2] == 1,
                 "Unexpected firmware-version response; OLED writes are disabled");
-            Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' && (reply[7] == (byte)'2' || reply[7] == (byte)'3' || reply[7] == (byte)'4' || reply[7] == (byte)'5'),
+            Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' && reply[7] >= (byte)'2' && reply[7] <= (byte)'9',
                 "Firmware does not advertise a supported OLED extension; OLED operations are disabled");
             Require((!expectedMajor.HasValue || reply[3] == expectedMajor.Value) && (!expectedMinor.HasValue || reply[4] == expectedMinor.Value),
                 "Firmware version does not match the supported OLED revision");

@@ -1,5 +1,6 @@
 /* OL5: fixed 64-byte EP0 OUT chunks. Stock USB OUT cannot reassemble132B.
- * Qualified RF SET/GET wrappers preserve stock 30-byte RF fragmentation.
+ * Mouse-side RF wrappers preserve stock 30-byte RF fragmentation in the model;
+ * end-to-end forwarding by the physical receiver is not qualified.
  * One pinned EP0 mouse-ready guard; retained SRAM frame with native ownership.
  * No OUT reassembly replacement or new NVM writes.
  * GO4 chunk40px; GS4 status64B; descriptor22 patched to63 payload bytes.
@@ -163,11 +164,22 @@ g9_ol5_set_hook:
     cmp r0,#0
     bne .Ldone
     ldr r0,=0x00400a7a
-    ldrb r6,[r0] /* Wake initializes only when this sleep flag was nonzero. */
+    ldrb r6,[r0]
+    cmp r6,#0
+    beq .Lcall_commit_wake
+    /* Initialization from earlier this boot is stale after sleep. Native
+     * wake may skip init under AF1; only its actual final-AF hook can prove
+     * that this wake initialized the panel. */
+    bl .Llookup
+    cmp r0,#0
+    beq .Lcall_commit_wake
+    ldr r1,=META
+    adds r0,r0,r1
+    movs r1,#0
+    strb r1,[r0,#19]
+.Lcall_commit_wake:
     ldr r3,=STOCK_WAKE
     blx r3
-    cmp r6,#0
-    bne .Ldone
     bl .Llookup
     cmp r0,#0
     beq .Ldone
