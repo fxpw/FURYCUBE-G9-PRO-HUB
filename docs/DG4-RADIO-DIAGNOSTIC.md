@@ -27,7 +27,10 @@ A later fresh reset and 1000 baseline preceded one **stock-startup GET06**
 through the pinned original x86 HIDAPI. It succeeded: A0 became ready, GET06
 requested and returned exactly nine bytes, and `06090144bb00000000` matched
 the saved profile-1 polling record byte for byte. No settings or OLED frame was
-written. The post-query display/input confirmation is pending.
+written. The owner then observed **1096** and confirmed continued normal input.
+After another fresh reset, the same GET06 through the unmodified managed
+transport timed out before a payload read; its visible baseline/result both
+remained 1001. A control changing only native SET padding is prepared.
 
 DG4 supplies the native DPI renderer with:
 
@@ -90,9 +93,8 @@ the offline transfer proof do not establish installed flash integrity or a
 working recovery path. Configuration readback and physical input/display checks
 are separate evidence; they do not replace a complete flash dump either.
 
-Next: record the visible result of the successful GET06, then isolate the same
-read through the existing managed transport without preceding version/profile
-queries. Production transport has not changed. Before any diagnostic whose
+Next: isolate native SET padding while keeping the managed read path unchanged.
+Production transport has not changed. Before any diagnostic whose
 interpretation depends on request identity, record a different visible baseline
 and observe the result before another configuration operation replaces context.
 A passive input check sends no such requests.

@@ -59,8 +59,9 @@ A0 GET8: A0 01 00 00 00 00 00 00
 GET06 length9: 06 09 01 44 BB 00 00 00 00
 ```
 
-The response exactly matched the saved profile 1 / 1000 Hz record. Post-query OLED
-and physical-input confirmation remained pending when this finding was saved.
+The response exactly matched the saved profile 1 / 1000 Hz record. The owner
+then observed **1096** after movement and stop and confirmed normal cursor and
+buttons. On DG4, 1096 decodes to report 0x06/state 0.
 The process
 exited with code 0 in approximately 1.6 seconds. No settings/OLED write, prepare retry or
 ungranted payload read occurred. The caller retained an external process
@@ -73,8 +74,24 @@ library; it does not isolate which difference matters. A prepared private
 managed `G9Connection.QuerySettings(6,1)` control can isolate the existing
 8-byte prepare/64-byte payload transport from the OEM padded 134-byte
 prepare/9-byte payload combination, without preceding firmware/profile reads.
-That control had not run when this finding was saved. This does not yet prove a
-complete radio settings read or OLED transport.
+After another owner-confirmed reset, the baseline was 1001 (report 0/state 1).
+That managed control sent one unpadded eight-byte GET06 prepare and timed out
+with A0 not ready, before requesting any payload. After movement and stop the
+owner again saw 1001. Changing only startup order was therefore insufficient
+in this comparison. The 64-byte payload path was not exercised by the failure.
+
+A separate control is prepared to change only the native SET buffer to 134
+bytes, leaving its A0 reads, open mode and granted 64-byte payload read intact.
+It has not run yet. This does not yet prove a complete radio settings read or
+OLED transport.
+
+The Vue host now skips its separate automatic firmware-version query when the
+selected device is on radio. That query previously ran after a successful
+settings scan, both from the timer and the manual scan action, and could stall
+the otherwise usable channel with GET0B. The generation is marked as attempted
+and the radio firmware value remains unknown; wired version reads are unchanged.
+The native Vue host compiled successfully. This source change has not yet been
+checked in a live HUB session and does not change the configuration transport.
 
 ## Exact next sensor-read boundary
 

@@ -52,8 +52,9 @@ The same firmware then passed the input check without a PC reboot.
 The subsequently installed DG4 diagnostic also passed USB input after that
 recovery and a separate radio input check. Its stock-startup polling read now
 succeeded through the OEM library; the failed version query alone did not
-establish a failure of the entire configuration channel. Production startup
-and transport changes still require a controlled comparison.
+establish a failure of the entire configuration channel. The Vue source now
+skips its automatic radio version query; wired version reads remain available.
+Transport changes still require a controlled comparison.
 See the [OEM startup read and live polling result](docs/OEM-FIRST-RADIO-READ.md).
 See [Windows input recovery](docs/WINDOWS-INPUT-RECOVERY.md).
 The brief screen change reported
