@@ -30,7 +30,11 @@ the saved profile-1 polling record byte for byte. No settings or OLED frame was
 written. The owner then observed **1096** and confirmed continued normal input.
 After another fresh reset, the same GET06 through the unmodified managed
 transport timed out before a payload read; its visible baseline/result both
-remained 1001. A control changing only native SET padding is prepared.
+remained 1001. A later fresh-reset native control padded only the SET to 134
+bytes: A0 again timed out before a payload read, but the owner now saw **1096**
+from a 1000 baseline. This visibly established report 0x06 while the host still
+had no ready grant. An original-library A0-only observation of the same pending
+request was also not ready. No prepare was resent or payload consumed.
 
 DG4 supplies the native DPI renderer with:
 
@@ -93,7 +97,8 @@ the offline transfer proof do not establish installed flash integrity or a
 working recovery path. Configuration readback and physical input/display checks
 are separate evidence; they do not replace a complete flash dump either.
 
-Next: isolate native SET padding while keeping the managed read path unchanged.
+Next: isolate explicit input/output GET buffers while retaining SET134 and the
+existing handle mode and requested read lengths.
 Production transport has not changed. Before any diagnostic whose
 interpretation depends on request identity, record a different visible baseline
 and observe the result before another configuration operation replaces context.

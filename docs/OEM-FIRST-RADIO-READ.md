@@ -80,10 +80,25 @@ with A0 not ready, before requesting any payload. After movement and stop the
 owner again saw 1001. Changing only startup order was therefore insufficient
 in this comparison. The 64-byte payload path was not exercised by the failure.
 
-A separate control is prepared to change only the native SET buffer to 134
+A separate fresh-reset control changed only the native SET buffer to 134
 bytes, leaving its A0 reads, open mode and granted 64-byte payload read intact.
-It has not run yet. This does not yet prove a complete radio settings read or
-OLED transport.
+It again timed out with A0 not ready, without requesting a payload. However,
+the owner now observed **1096** from a 1000 baseline: the padded request was
+visibly accepted by the mouse. Padding alone did not complete the transaction.
+
+One bounded observation of that known pending request through the original
+HIDAPI also returned A0 not ready. It sent no prepare and did not read GET06.
+This does not show that switching the read API after a failed session can
+recover its pending response.
+
+Actual instruction execution from the installed x64 and x86 `hid.dll` exposed
+another API difference: `HidD_GetFeature` calls IOCTL `0xB0192` with a null,
+zero-length input and the report as output. The original HIDAPI calls that IOCTL
+with the same report buffer and length as both input and output. A private
+control is prepared to match that in/out form while retaining the existing
+zero-access, non-overlapped handle, SET134, A0 GET8 and granted GET64. It has
+not run yet; this is an observed API difference, not an established cause.
+Complete radio settings and OLED transport remain unqualified.
 
 The Vue host now skips its separate automatic firmware-version query when the
 selected device is on radio. That query previously ran after a successful
