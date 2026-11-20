@@ -60,3 +60,11 @@ physical display at 1600, with input and saved settings verified afterward.
 The [candidate matrix](RF-CANDIDATE-MATRIX.md) records the physical test and the
 replay of its exact reports. Actual receiver delivery and firmware recovery
 still need verification.
+
+The earlier, readback-verified DPI change through FA60 passed a 56-byte SET04
+buffer to Windows. The unsuccessful OL9 frame used a 134-byte buffer. The
+guarded frame CLI has a `--logical-feature-length` comparison mode for OL9
+only. It requires an explicit FA60 device path and sends the same carrier
+bytes through each 56-byte feature call. Version and profile discovery retain
+their qualified transport. The test isolates the length supplied to Windows;
+the receiver's on-wire behavior and the physical display still need testing.

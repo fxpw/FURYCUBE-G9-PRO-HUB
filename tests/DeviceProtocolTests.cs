@@ -131,10 +131,17 @@ internal static class DeviceProtocolTests {
         Buffer.BlockCopy(Hex("0c080101fe05fa00"),0,liveOl9Profile,0,8);
         liveOl9Profile[8]=0x04;
         G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c39"),G9Wire.ConfigurationReply(0xFA60,0x0C,8,liveOl9Profile));count++;
-        byte[] carrier9=G9Wire.Ol9RadioCarrier(Furycube.G9.Oled.OledShortProtocol.BuildWriteChunk(0,0,pixels40,true));
+        byte[] ol9Chunk=Furycube.G9.Oled.OledShortProtocol.BuildWriteChunk(0,0,pixels40,true);
+        byte[] carrier9=G9Wire.Ol9RadioCarrier(ol9Chunk);
         Pass(G9Wire.Equal(carrier9,Hex("04380100013f00000128000102030405060708090a0b0c0d000e0f101112131415161718191a1b1c1d1e1f20212223242526034ee98d2709")),"OL9 packet matches independent Python/ARM vector with OEM sum and isolated final pixel");
         int sensorSum=0;for(int i=3;i<50;i++)sensorSum+=carrier9[i];
         Pass(sensorSum==((carrier9[50]<<8)|carrier9[51]),"OL9 preserves the original sensor checksum envelope");
+        byte[] shortCarrier9=G9Wire.RadioOledFeatureBuffer("OL9",134,ol9Chunk,true);
+        byte[] paddedCarrier9=G9Wire.RadioOledFeatureBuffer("OL9",134,ol9Chunk,false);
+        byte[] expectedPadded=new byte[134];Buffer.BlockCopy(carrier9,0,expectedPadded,0,56);
+        Pass(G9Wire.Equal(shortCarrier9,carrier9)&&G9Wire.Equal(paddedCarrier9,expectedPadded),"OL9 length experiment changes only the feature envelope");
+        Reject(delegate{G9Wire.RadioOledFeatureBuffer("OL8",134,ol9Chunk,true);},"56-byte feature experiment restricted to OL9");
+        Reject(delegate{G9Wire.RadioOledFeatureBuffer("OL9",262,ol9Chunk,true);},"56-byte feature experiment cannot target a wired buffer");
         Reject(delegate{G9Wire.ValidateSend(carrier9);},"checksum-compatible carrier still cannot pass settings allowlist");
         Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,carrier9);},"configuration padding does not admit reserved OL9 carrier");
         Reject(delegate{G9Wire.Ol9RadioCarrier(Change(oledChunk,62,0));},"OL9 refuses malformed source GO4");

@@ -93,6 +93,17 @@ internal static class G9Wire {
         packet[53]=(byte)crc;packet[54]=(byte)(crc>>8);packet[55]=6;
         return packet;
     }
+    internal static byte[] RadioOledFeatureBuffer(string extension, int featureBytes, byte[] chunk, bool logicalFeatureLength) {
+        Require(featureBytes==134, "Radio OLED requires the exact receiver feature capacity");
+        Require(extension=="OL6" || extension=="OL7" || extension=="OL8" || extension=="OL9",
+            "Reserved OLED carrier requires OL6..OL9");
+        Require(!logicalFeatureLength || extension=="OL9", "The 56-byte feature experiment requires OL9");
+        byte[] packet=extension=="OL9" ? Ol9RadioCarrier(chunk) : Ol6RadioCarrier(chunk);
+        if(logicalFeatureLength) return packet;
+        var buffer=new byte[featureBytes];
+        Buffer.BlockCopy(packet,0,buffer,0,packet.Length);
+        return buffer;
+    }
     internal static byte[] Ol9RadioCarrier(byte[] chunk) {
         OledShortProtocol.ValidateWriteChunk(chunk);
         byte[] packet=new byte[56];
@@ -354,7 +365,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             return G9SettingsTransactions.RestoreProfilePair(this,snapshotFile,backupDirectory);
         }
     }
-    internal void WriteOl6RadioExperiment(byte[] frame) {
+    internal void WriteOl6RadioExperiment(byte[] frame, bool logicalFeatureLength) {
         lock(oledGate) {
             OledProtocol.ValidateFrame(frame);
             if(Device.Product!=0xFA60 || Device.FeatureBytes!=134)throw new InvalidDataException("OL6 radio experiment requires receiver FA60/134; no feature command sent");
@@ -363,22 +374,21 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             // Reject old firmware before any further query or reserved packet.
             string extension=OledProtocol.DecodeFirmwareCapabilities(firmware).Extension;
             if(extension!="OL6" && extension!="OL7" && extension!="OL8" && extension!="OL9")throw new InvalidDataException("OL6..OL9 firmware is required; no reserved carrier sent");
+            if(logicalFeatureLength && extension!="OL9")throw new InvalidDataException("The 56-byte feature experiment requires OL9; no reserved carrier sent");
             byte[] profileReport=Read(G9Wire.ReadProfileRequest(),0x0C,8);
             G9Wire.ValidateOl6RadioIdentity(Device.Product,Device.FeatureBytes,firmware,profileReport);
             for(int index=0;index<12;index++) {
                 EnsureSettingsIdentity();
                 byte[] pixels=new byte[40];Buffer.BlockCopy(frame,index*40,pixels,0,40);
                 byte[] chunk=OledShortProtocol.BuildWriteChunk(index/3,(index%3)*40,pixels,index==0);
-                byte[] packet=extension=="OL9"?G9Wire.Ol9RadioCarrier(chunk):G9Wire.Ol6RadioCarrier(chunk);
-                // The firmware receives the logical SET04 length in byte 1.
-                // Use the OEM receiver's full feature buffer for USB transport.
-                var envelope=new byte[Device.FeatureBytes];
-                Buffer.BlockCopy(packet,0,envelope,0,packet.Length);
+                byte[] envelope=G9Wire.RadioOledFeatureBuffer(extension,Device.FeatureBytes,chunk,logicalFeatureLength);
                 if(!G9Hid.HidD_SetFeature(handle,envelope,envelope.Length)) {
                     receiverSessionFailed=true;
                     throw new Win32Exception(Marshal.GetLastWin32Error(),"Radio OLED carrier failed; no remaining chunks sent");
                 }
-                Console.WriteLine("OL6_RADIO_SEND index={0} firmware={2} len=56 data={1} usbLen={3}",index,G9Wire.Hex(packet),extension,envelope.Length);
+                var logicalPacket=new byte[56];
+                Buffer.BlockCopy(envelope,0,logicalPacket,0,logicalPacket.Length);
+                Console.WriteLine("OL6_RADIO_SEND index={0} firmware={2} len=56 data={1} usbLen={3}",index,G9Wire.Hex(logicalPacket),extension,envelope.Length);
                 Thread.Sleep(500);
             }
             Console.WriteLine("OL6_RADIO_EXPERIMENT_SENT=12 DISPLAY_VERIFIED=false; no automatic follow-up query or retry");
@@ -498,6 +508,7 @@ internal static class G9DeviceProgram {
             string frameFile = null; byte[] oledFrame = null;
             int? assignmentIndex = null; byte? function = null; byte param1 = 0, param2 = 0;
             int? requestedProfile=null; bool activeMapping=false; string settingField=null,settingValue=null;
+            bool logicalFeatureLength=false;
             string profileRestoreFile=null;
             string backupDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FURYCUBE-G9-PRO", "backups");
             for (int i = 1; i < args.Length; i++) {
@@ -518,6 +529,7 @@ internal static class G9DeviceProgram {
                 else if (command == "assign" && args[i] == "--function" && i + 1 < args.Length) function = HexByte(args[++i]);
                 else if (command == "assign" && args[i] == "--param1" && i + 1 < args.Length) param1 = HexByte(args[++i]);
                 else if (command == "assign" && args[i] == "--param2" && i + 1 < args.Length) param2 = HexByte(args[++i]);
+                else if(command=="ol6-radio-frame" && args[i]=="--logical-feature-length" && !logicalFeatureLength) logicalFeatureLength=true;
                 else if ((command == "oled-frame" || command == "ol6-radio-frame") && args[i] == "--file" && i + 1 < args.Length && frameFile == null) frameFile = Path.GetFullPath(args[++i]);
                 else if (command == "restore" && restore == null) restore = Path.GetFullPath(args[i]);
                 else throw new ArgumentException("Unexpected command argument");
@@ -531,6 +543,8 @@ internal static class G9DeviceProgram {
             }
             if(activeMapping && requestedProfile.HasValue) throw new ArgumentException("Choose either --active or --profile");
             if(command=="settings-set" && (String.IsNullOrEmpty(settingField) || settingValue==null)) throw new ArgumentException("Settings write requires --field and --value");
+            if(logicalFeatureLength && (pid!=0xFA60 || expectedPath==null))
+                throw new ArgumentException("The 56-byte feature experiment requires --pid fa60 and --expected-path");
             if (command == "oled-frame" || command == "ol6-radio-frame") {
                 if (frameFile == null || new FileInfo(frameFile).Length != OledProtocol.BufferBytes) throw new InvalidDataException("OLED upload requires --file pointing to a 480-byte packed frame");
                 oledFrame = File.ReadAllBytes(frameFile); OledProtocol.ValidateFrame(oledFrame);
@@ -547,7 +561,7 @@ internal static class G9DeviceProgram {
                 Console.WriteLine("CAPS ONLY: no feature reports requested or settings written."); return 0;
             }
             using (var device = new G9Connection(pid,expectedPath)) {
-                if(command=="ol6-radio-frame") { device.WriteOl6RadioExperiment(oledFrame);return 0; }
+                if(command=="ol6-radio-frame") { device.WriteOl6RadioExperiment(oledFrame,logicalFeatureLength);return 0; }
                 if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out, new NativeOledTransport(device));
                 if (command == "oled-caps" || command == "oled-frame" || command == "oled-status") {
                     var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();
