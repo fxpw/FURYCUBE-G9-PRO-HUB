@@ -159,6 +159,9 @@ Use **+ Image** or **+ Widget**, adjust the layout, then choose **Upload to OLED
 optional GPU/temperature sources use existing local drivers or sensor services.
 Unavailable values show a dash. `DPI#` is a stage number. The numeric DPI
 widget uses device status over USB and the read-back DPI table over 2.4 GHz.
+On 2.4 GHz, background OLED transfers wait for a short break in Windows input.
+If input resumes during a transfer, the next idle update sends a fresh frame.
+Manual uploads and USB live updates can run during input.
 
 Portable examples:
 

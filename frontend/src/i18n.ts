@@ -179,6 +179,7 @@ export const english: Record<string, string> = {
     "Refresh the connection, firmware version, assignments and available settings.",
   "Обновляется…": "Updating…",
   "Обновлять в реальном времени": "Update live",
+  "Обновление OLED по 2.4G ждёт паузы во вводе.": "2.4 GHz OLED updates resume when input is idle.",
   "Ожидание устройства": "Waiting for device",
   "Окно закрыто": "Window closed",
   "Оставьте хотя бы один уровень DPI": "Keep at least one DPI stage enabled",

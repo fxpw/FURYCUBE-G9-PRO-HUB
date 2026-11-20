@@ -33,6 +33,31 @@ internal static class OledStreamTests {
         byte[] pixels = new byte[480]; pixels[0] = first; pixels[479] = last;
         return "FRAME " + Convert.ToBase64String(pixels);
     }
+    static void CheckRadioInputPriority() {
+        var radio = new FakeTransport { Pid = 0xFA60, Version = new byte[] { 11, 5, 1, 1, 8, (byte)'O', (byte)'L', (byte)'9' } };
+        var output = new StringWriter();
+        string live = "LIVE " + Frame(1, 0).Substring(6);
+        int checksAtFragment = 0;
+        var delays = new List<int>();
+        OledStreaming.Run(new StringReader(live + "\n" + live + "\n" + live + "\n" + Frame(2, 0) + "\nSTOP\n"),
+            output, radio, delays.Add, delegate {
+                int check = ++checksAtFragment;
+                return check != 1 && check != 3;
+            });
+        Check(output.ToString().Replace("\r\n", "\n") ==
+            "OLED_STREAM_READY\nOLED_FRAME_DEFERRED 1\nOLED_FRAME_DEFERRED 2\nOLED_FRAME_SENT 3\nOLED_FRAME_SENT 4\n",
+            "radio live defers before first or next fragment while manual frames bypass input priority");
+        Check(radio.Reads == 1 && radio.Writes.Count == 25 && checksAtFragment == 15 &&
+            delays.Count == 25 && delays.TrueForAll(value => value == 500),
+            "radio priority reuses discovery and preserves pacing for each submitted fragment");
+        Check(radio.Writes[0][10] != 0 && radio.Writes[1][10] == radio.Writes[0][10] && radio.Writes[13][10] == 0,
+            "a partial initial frame does not consume display initialization");
+
+        var usb = new FakeTransport();
+        OledStreaming.Run(new StringReader(live + "\nSTOP\n"), new StringWriter(), usb,
+            delegate(int value) { }, delegate { throw new Exception("USB must not query desktop activity"); });
+        Check(usb.Writes.Count == 4, "USB live frame is fully transmitted without an input check");
+    }
     static void Reject(string command, string name) {
         var fake = new FakeTransport(); var output = new StringWriter();
         string input = command + "\n" + Frame(2, 0) + "\n";
@@ -137,6 +162,7 @@ internal static class OledStreamTests {
         try { OledStreaming.Run(new StringReader(Frame(1, 0)), stockOutput, stock, delegate(int value) { }); throw new Exception("FAIL accepted stock"); }
         catch (InvalidDataException) { checks++; }
         Check(stock.Writes.Count == 0 && stockOutput.ToString() == "", "stock discovery has no READY or SET22");
+        CheckRadioInputPriority();
         Console.WriteLine("PASS " + checks + " fake OLED stream checks; no USB, no physical display claim");
         return 0;
     } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }

@@ -305,7 +305,8 @@ internal sealed partial class G9Hub : Form {
         assignments.Controls.Add(mousePages);
         var mouse = new TabPage("Устройство и прошивка") { Padding=new Padding(8) };
         mouse.Controls.Add(log); mouse.Controls.Add(buttons); mouse.Controls.Add(status); mouse.Controls.Add(description);
-        screenEditor=new G9ScreenEditor(Append,SendFrame,ReadRuntimeStatus,cachedRadioDpiReader:ReadCachedRadioDpi);
+        screenEditor=new G9ScreenEditor(Append,pixels=>SendFrame(pixels,false),ReadRuntimeStatus,
+            cachedRadioDpiReader:ReadCachedRadioDpi,liveFrameSender:pixels=>SendFrame(pixels,true));
         screenEditor.SuspendDevice("Чтение подключённой мыши… OLED пока приостановлен.");
         var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(screenEditor);
         tabs.TabPages.Add(assignments); tabs.TabPages.Add(screen); tabs.TabPages.Add(mouse); tabs.SelectedIndex=0; Controls.Add(tabs);
@@ -460,7 +461,7 @@ internal sealed partial class G9Hub : Form {
             return RunDeviceProcess(action);
         }
     }
-    Task<string> SendFrame(byte[] pixels) {
+    Task<string> SendFrame(byte[] pixels,bool live) {
         Furycube.G9.Oled.OledProtocol.ValidateFrame(pixels);
         int generation=deviceGeneration;
         string identity=selectedIdentity;
@@ -475,7 +476,7 @@ internal sealed partial class G9Hub : Form {
                         System.Threading.Interlocked.Exchange(ref oledWorker,current);
                         if(closing || generation!=deviceGeneration)throw new OperationCanceledException("Подключение OLED изменилось.");
                     }
-                    current.Send(pixels);
+                    if(!current.Send(pixels,live))return null;
                     return "Кадров отправлено: " + current.FramesSubmitted + " · " + DateTime.Now.ToString("HH:mm:ss");
                 } catch {
                     if(current!=null) {

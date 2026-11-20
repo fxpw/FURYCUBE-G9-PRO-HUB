@@ -1,9 +1,38 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Furycube.G9.Oled {
+    internal static class OledStreamCommand {
+        internal const string Frame = "FRAME ";
+        internal const string Live = "LIVE ";
+        internal const string Sent = "OLED_FRAME_SENT ";
+        internal const string Deferred = "OLED_FRAME_DEFERRED ";
+    }
+
+    internal static class RadioOledInputPriority {
+        const int IdleMilliseconds = 900;
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct LastInputInfo {
+            internal uint Size;
+            internal uint Tick;
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool GetLastInputInfo(ref LastInputInfo info);
+
+        internal static bool IsDesktopIdle() {
+            var info = new LastInputInfo { Size = (uint)Marshal.SizeOf(typeof(LastInputInfo)) };
+            if (!GetLastInputInfo(ref info)) return false;
+            int elapsed = unchecked(Environment.TickCount - (int)info.Tick);
+            return elapsed >= IdleMilliseconds;
+        }
+    }
+
     public sealed class FirmwareCapabilities {
         public byte VersionMajor { get; private set; }
         public byte VersionMinor { get; private set; }
@@ -154,9 +183,10 @@ namespace Furycube.G9.Oled {
     }
     public sealed class OledTransferResult {
         public int FeatureReportsSent { get; private set; }
+        internal bool Deferred { get; private set; }
         public bool DisplayVerified { get { return false; } }
         public string PhysicalValidation { get { return "NOT TESTED"; } }
-        internal OledTransferResult(int sent) { FeatureReportsSent = sent; }
+        internal OledTransferResult(int sent, bool deferred = false) { FeatureReportsSent = sent; Deferred = deferred; }
     }
     public sealed class OledSender {
         readonly object gate = new object(); readonly IOledTransport transport; readonly Action<int> wait; FirmwareCapabilities capabilities; bool displayInitialized; ushort discoveredProduct;
@@ -196,7 +226,9 @@ namespace Furycube.G9.Oled {
                 } catch { capabilities = null; displayInitialized = false; throw; }
             }
         }
-        public OledTransferResult WriteFrame(byte[] pixels) {
+        public OledTransferResult WriteFrame(byte[] pixels) { return WriteFrame(pixels, null); }
+
+        internal OledTransferResult WriteFrame(byte[] pixels, Func<bool> canSendRadioFragment) {
             lock (gate) {
                 ValidateIdentity();
                 if (capabilities == null) throw new InvalidOperationException("Verified OLED discovery is required before any OLED feature report");
@@ -206,7 +238,11 @@ namespace Furycube.G9.Oled {
                 bool radio = discoveredProduct == 0xFA60;
                 try {
                     foreach (byte[] report in reports) {
-                        ValidateIdentity(); transport.SendFeature(report); sent++;
+                        ValidateIdentity();
+                        // A later first fragment resets the firmware's staged frame.
+                        if (radio && canSendRadioFragment != null && !canSendRadioFragment())
+                            return new OledTransferResult(sent, true);
+                        transport.SendFeature(report); sent++;
                         // Keep the tested receiver gap after the last fragment
                         // before the next frame or settings read.
                         if (radio || sent < reports.Length) wait(radio ? 500 : 25);

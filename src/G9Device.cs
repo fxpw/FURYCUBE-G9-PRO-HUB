@@ -573,7 +573,8 @@ internal static class G9DeviceProgram {
             }
             using (var device = new G9Connection(pid,expectedPath,command=="oled-stream")) {
                 if(command=="ol6-radio-frame") { device.WriteOl6RadioExperiment(oledFrame,logicalFeatureLength);return 0; }
-                if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out, new NativeOledTransport(device));
+                if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out,
+                    new NativeOledTransport(device), canSendRadioFragment: RadioOledInputPriority.IsDesktopIdle);
                 if (command == "oled-caps" || command == "oled-frame" || command == "oled-status") {
                     var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();
                     Console.WriteLine("OLED_CAPS_JSON " + new JavaScriptSerializer().Serialize(new { supported = true, extension = capabilities.Extension, width = capabilities.Width,

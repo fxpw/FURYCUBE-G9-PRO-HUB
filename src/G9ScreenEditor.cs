@@ -46,6 +46,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
     readonly ToolTip tips=new ToolTip {AutoPopDelay=12000,InitialDelay=400,ReshowDelay=100};
     readonly Action<string> report;
     readonly Func<byte[],Task<string>> sendFrame;
+    readonly Func<byte[],Task<string>> sendLiveFrame;
     readonly Func<Task<OledRuntimeStatus>> readRuntimeStatus;
     readonly Func<TelemetrySnapshot,int?> readCachedRadioDpi;
     OledRuntimeStatus runtimeStatus;
@@ -84,8 +85,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
         internal GeometrySlider(string value){title=value;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
         internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+" px";}
     }
-    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null){
-        report=logger;sendFrame=frameSender;readRuntimeStatus=runtimeStatusReader;readCachedRadioDpi=cachedRadioDpiReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
+    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null,Func<byte[],Task<string>> liveFrameSender=null){
+        report=logger;sendFrame=frameSender;sendLiveFrame=liveFrameSender;readRuntimeStatus=runtimeStatusReader;readCachedRadioDpi=cachedRadioDpiReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
         backgroundServicesEnabled=backgroundServices;
         autosaveFile=savedEditorFile??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
         resumeFrameFile=autosaveFile+".last-frame";
@@ -168,8 +169,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
         bold.CheckedChanged+=delegate{WidgetStyleChanged();};showLabel.CheckedChanged+=delegate{WidgetStyleChanged();};lit.CheckedChanged+=delegate{WidgetStyleChanged();};clearBackground.CheckedChanged+=delegate{WidgetStyleChanged();};
         foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,fontSlider})slider.Track.ValueChanged+=delegate(object sender,EventArgs e){GeometryChanged((TrackBar)sender);};
         preview.Paint+=DrawSelection;preview.MouseDown+=StartDrag;preview.MouseMove+=MoveDrag;preview.MouseUp+=delegate{dragging=false;preview.Capture=false;};preview.Resize+=delegate{Render();};
-        timer.Tick+=async delegate{await RefreshSensors();if(!IsDisposed&&!disposedEditor&&live.Checked)await UploadFrame(true);};autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
-        live.CheckedChanged+=async delegate{if(syncing)return;if(live.Checked)await UploadFrame();else{resumeFrame.Freeze();SaveResumeFrame();}};
+        timer.Tick+=async delegate{await RefreshSensors();if(!IsDisposed&&!disposedEditor&&live.Checked)await UploadFrame(background:true,quiet:true);};autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
+        live.CheckedChanged+=async delegate{if(syncing)return;if(live.Checked)await UploadFrame(background:true);else{resumeFrame.Freeze();SaveResumeFrame();}};
     }
     LayerItem SelectedLayer(){return layers.SelectedItem as LayerItem;}
     ScreenWidget SelectedWidget(){LayerItem selected=SelectedLayer();return selected==null?null:selected.Widget;}
@@ -279,10 +280,15 @@ internal sealed partial class G9ScreenEditor : UserControl {
             info.Text=oledNote;
         }catch(Exception e){current=null;info.Text="Не удалось отрисовать: "+e.Message;}
     }
-    async Task UploadFrame(bool quiet=false){
+    const string WaitingForInputIdle="Обновление OLED по 2.4G ждёт паузы во вводе.";
+    async Task UploadFrame(bool background=false,bool quiet=false){
         if(uploading||sendFrame==null||!transportAvailable)return;Render();if(current==null)return;
         int epoch=transportEpoch,operation=++uploadSerial;
         if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";Render();return;}
+        bool prioritizeInput=background&&radioTransport&&sendLiveFrame!=null;
+        if(prioritizeInput&&!RadioOledInputPriority.IsDesktopIdle()){
+            lastUploadError=null;oledNote=WaitingForInputIdle;Render();return;
+        }
         lastUploadError=null;uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
         try{
             // Radio rendering uses the checked settings snapshot and passive
@@ -295,7 +301,10 @@ internal sealed partial class G9ScreenEditor : UserControl {
             if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";return;}
             Render();if(current==null){live.Checked=false;return;}
             byte[] pixels=(byte[])current.Buffer.Clone();
-            string sent=await sendFrame(pixels);if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;oledNote=sent;
+            string sent=await (prioritizeInput?sendLiveFrame:sendFrame)(pixels);
+            if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;
+            if(prioritizeInput&&sent==null){oledNote=WaitingForInputIdle;return;}
+            oledNote=sent;
             resumeFrame.Remember(pixels,live.Checked);resumeFrameInvalid=false;displayOwnedThisRun=true;SaveResumeFrame();
             if(live.Checked)oledNote+=" Автообновление включено; HUB должен работать.";if(!quiet)Log(oledNote);
         }
@@ -331,7 +340,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
     internal async Task ResumeLive() {
         if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null)return;
         bool previous=syncing;syncing=true;try {live.Checked=true;}finally {syncing=previous;}
-        await UploadFrame();
+        await UploadFrame(background:true);
     }
     void SaveResumeFrame(){try{resumeFrame.Save(resumeFrameFile);}catch(Exception error){Log("Кадр отправлен, но его копия на ПК не сохранена: "+error.Message);}}
     internal async Task ResumeDisplay() {

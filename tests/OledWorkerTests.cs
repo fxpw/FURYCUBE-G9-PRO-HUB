@@ -74,7 +74,12 @@ internal static class OledWorkerTests {
         using(var input=OledStreaming.OpenUtf8Input(Console.OpenStandardInput())){
         int index=0,status=0;for(;;){string line=input.ReadLine();if(line==null)return mode=="normal"?3:0;if(line=="STOP")return 0;
             if(line=="STATUS"){ChildStatus(mode,++status);continue;}
-            if(!line.StartsWith("FRAME ")||Convert.FromBase64String(line.Substring(6)).Length!=480)return 2;
+            bool live=line.StartsWith(OledStreamCommand.Live,StringComparison.Ordinal);
+            string prefix=live?OledStreamCommand.Live:OledStreamCommand.Frame;
+            if(!line.StartsWith(prefix,StringComparison.Ordinal)||Convert.FromBase64String(line.Substring(prefix.Length)).Length!=480)return 2;
+            if((mode=="defer-first"&&index==0&&live)||mode=="defer-manual"){
+                Emit(OledStreamCommand.Deferred+(++index));continue;
+            }
             if(mode=="hang")Thread.Sleep(Timeout.Infinite);
             if(mode=="delay")Thread.Sleep(80);
             index++;Console.WriteLine("OLED_FRAME_SENT "+(mode=="bad-ack"?7:index));Console.Out.Flush();
@@ -222,6 +227,13 @@ internal static class OledWorkerTests {
             Check(Dead(normalPid),"Dispose terminates the normal helper");
             CheckStatus(frame);
             CheckShortStatus(frame);
+            using(var worker=Worker("defer-first",3000,null)){
+                Check(!worker.Send(frame,true)&&worker.FramesSubmitted==0,"deferred background command has no submitted frame");
+                Check(worker.Send(frame,true)&&worker.Send(frame)&&worker.FramesSubmitted==2,"next live and manual frames complete in the same session");
+            }
+            using(var worker=Worker("defer-manual",3000,null)){
+                Reject(delegate{worker.Send(frame);},"deferred response is rejected for a manual frame");
+            }
             using(var worker=Worker("delay",3000,null)){
                 Task a=Task.Run(delegate{worker.Send(frame);}),b=Task.Run(delegate{worker.Send(frame);});
                 Check(Task.WaitAll(new[]{a,b},5000)&&worker.FramesSubmitted==2,"concurrent callers are serialized without skipped acknowledgements");
