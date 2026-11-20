@@ -263,13 +263,15 @@ internal static class G9Hid {
 
 internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRuntimeStatusDeviceSession, IG9SettingsSession {
     readonly SafeFileHandle handle;
+    readonly bool oledStream;
     readonly object oledGate = new object();
     bool oledAuthorized, oledRuntimeStatusAuthorized, oledShortReportsAuthorized, oledRadioAuthorized;
     bool receiverSessionFailed;
     internal readonly G9Hid.Candidate Device;
     public ushort VendorId { get { return 0x1D57; } }
     public ushort ProductId { get { return Device.Product; } }
-    internal G9Connection(ushort requestedPid, string expectedPath = null) {
+    internal G9Connection(ushort requestedPid, string expectedPath = null, bool oledStream = false) {
+        this.oledStream = oledStream;
         List<G9Hid.Candidate> all = G9Hid.Enumerate(); ushort wanted = requestedPid;
         if (wanted == 0) { wanted = 0xFA60; foreach (var item in all) if (item.Product == 0x2148) wanted = 0x2148; }
         var matches = all.FindAll(delegate(G9Hid.Candidate item) { return item.Product == wanted; });
@@ -428,7 +430,9 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             EnsureOledIdentity();
             if (!oledShortReportsAuthorized) throw new OledFirmwareUnsupportedException("OL4 or later is required for USB OLED writes.");
             byte[] envelope = G9Wire.OledSetBuffer(Device.Product, Device.FeatureBytes, report);
-            if (Device.Product == 0xFA60 && report[7] == 0 && report[8] == 0) RequireRadioOledProfile();
+            // Stream discovery checks profile 1 once. OL9 checks the active
+            // profile for each fragment, without a host GET between frames.
+            if (Device.Product == 0xFA60 && !oledStream && report[7] == 0 && report[8] == 0) RequireRadioOledProfile();
             if (!G9Hid.HidD_SetFeature(handle, envelope, envelope.Length)) {
                 if(Device.Product == 0xFA60) receiverSessionFailed = true;
                 oledAuthorized = oledRuntimeStatusAuthorized = false; throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED SetFeature failed; remaining pages were not sent");
@@ -567,7 +571,7 @@ internal static class G9DeviceProgram {
                     Console.WriteLine("CAPS VID=1d57 PID={0:x4} version={1:x4} featureBytes={2} path={3}", candidate.Product, candidate.Version, candidate.FeatureBytes, candidate.Path);
                 Console.WriteLine("CAPS ONLY: no feature reports requested or settings written."); return 0;
             }
-            using (var device = new G9Connection(pid,expectedPath)) {
+            using (var device = new G9Connection(pid,expectedPath,command=="oled-stream")) {
                 if(command=="ol6-radio-frame") { device.WriteOl6RadioExperiment(oledFrame,logicalFeatureLength);return 0; }
                 if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out, new NativeOledTransport(device));
                 if (command == "oled-caps" || command == "oled-frame" || command == "oled-status") {

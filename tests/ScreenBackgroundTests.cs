@@ -54,6 +54,20 @@ internal static class ScreenBackgroundTests {
         var closed=new G9ScreenEditor(delegate{},delegate(byte[] bytes){disposedFrames++;return Task.FromResult("bad");},delegate{return delayed.Task;},Path.Combine(directory,"closed.json"),false);
         closed.AcceptProjectJson(NumericProject());Task pending=closed.ResumeLive();closed.Dispose();delayed.SetResult(new OledRuntimeStatus(1,1,2,1600,DateTimeOffset.UtcNow));await pending;
         Check(disposedFrames==0,"dispose cancels late status-to-frame continuation");
+        int dpi=1600,radioStatusRequests=0,radioFrames=0;
+        byte[] radioImage=null;
+        using(var editor=new G9ScreenEditor(delegate{},delegate(byte[] pixels){
+            radioFrames++;
+            if(radioImage!=null)Check(!Same(radioImage,pixels),"radio renders changes in the cached DPI value");
+            radioImage=(byte[])pixels.Clone();
+            return Task.FromResult("radio sent");
+        },delegate{radioStatusRequests++;throw new Exception("Radio rendering must not poll DPI");},Path.Combine(directory,"radio.json"),false,delegate{return dpi;})) {
+            editor.AcceptProjectJson(NumericProject());
+            editor.AllowDevice(true);
+            await editor.ResumeLive();
+            dpi=800;await editor.UploadCurrent();
+            Check(radioFrames==2&&radioStatusRequests==0&&editor.IsLive,"radio live frames use cached DPI without status queries");
+        }
         await RunResume(directory);
     }
     static async Task RunResume(string directory){

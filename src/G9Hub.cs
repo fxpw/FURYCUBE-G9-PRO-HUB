@@ -305,7 +305,7 @@ internal sealed partial class G9Hub : Form {
         assignments.Controls.Add(mousePages);
         var mouse = new TabPage("Устройство и прошивка") { Padding=new Padding(8) };
         mouse.Controls.Add(log); mouse.Controls.Add(buttons); mouse.Controls.Add(status); mouse.Controls.Add(description);
-        screenEditor=new G9ScreenEditor(Append,SendFrame,ReadRuntimeStatus);
+        screenEditor=new G9ScreenEditor(Append,SendFrame,ReadRuntimeStatus,cachedRadioDpiReader:ReadCachedRadioDpi);
         screenEditor.SuspendDevice("Чтение подключённой мыши… OLED пока приостановлен.");
         var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(screenEditor);
         tabs.TabPages.Add(assignments); tabs.TabPages.Add(screen); tabs.TabPages.Add(mouse); tabs.SelectedIndex=0; Controls.Add(tabs);
@@ -391,7 +391,7 @@ internal sealed partial class G9Hub : Form {
             if(!accepted)startupStatus.Text+=" Уже открытые правки сохранены; перечитайте нужную вкладку вручную.";
             latestDeviceRead=result;
             startupStatus.ForeColor=Color.DarkGreen;
-            screenEditor.AllowDevice();return true;
+            screenEditor.AllowDevice(selectedPid==0xFA60);return true;
         } catch(Exception error) {
             if(generation==deviceGeneration)latestScanFailure=error.Message;
             if(!closing && !IsDisposed) {startupStatus.Text="Авточтение не завершено. Настройки не применялись; подключите мышь и повторите чтение на нужной вкладке.";startupStatus.ForeColor=Color.DarkGoldenrod;Append("Авточтение: "+error.Message);}
@@ -486,6 +486,16 @@ internal sealed partial class G9Hub : Form {
                 }
             }
         });
+    }
+    int? ReadCachedRadioDpi(Furycube.G9.Telemetry.TelemetrySnapshot telemetry) {
+        var settings=settingsEditor.CurrentSnapshot;
+        DateTimeOffset readAt;
+        if(settings==null || settings.productId!=0xFA60 || settings.activeProfile!=1 || settings.profile!=1 ||
+            !DateTimeOffset.TryParse(settings.readAtUtc,out readAt))return null;
+        if(telemetry.ReportedProfileSampledAt>readAt && telemetry.ReportedProfileId!=1)return null;
+        var model=settings.Model;
+        int? stage=telemetry.DpiStageSampledAt>readAt?telemetry.DpiStage:model.SelectedStage;
+        return stage>=1 && stage<=8?(int?)model.DpiValues[stage.Value-1]:null;
     }
     Task<Furycube.G9.Oled.OledRuntimeStatus> ReadRuntimeStatus() {
         int generation=deviceGeneration;

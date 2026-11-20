@@ -41,9 +41,9 @@ automatically.
 
 The current receiver uses asynchronous feature reads. Settings queries
 use 134-byte prepare buffers, while OL9 OLED fragments use 56-byte feature
-calls. The tested 500 ms pacing takes about six seconds per radio frame,
-plus any widget data reads. The numeric DPI widget reads the sensor record
-over radio. See the [receiver transport results](docs/OEM-FIRST-RADIO-READ.md)
+calls. The tested 500 ms pacing takes about six seconds per radio frame.
+The radio DPI widget uses the sensor settings read at connection and passive
+DPI-stage updates from the mouse. See the [receiver transport results](docs/OEM-FIRST-RADIO-READ.md)
 and [OL9 carrier protocol](docs/OL9-CARRIER.md).
 
 The earlier DG3 USB input failure recovered without a PC reboot after a
@@ -157,8 +157,8 @@ The **OLED display** editor works on a **120 × 28 monochrome canvas**:
 Use **+ Image** or **+ Widget**, adjust the layout, then choose **Upload to OLED**.
 **Update live** sends ongoing clock and metric updates. CPU/RAM use Windows APIs;
 optional GPU/temperature sources use existing local drivers or sensor services.
-Unavailable or expired values show a dash. `DPI#` is a stage number; the numeric
-DPI widget uses a separate validated device-status snapshot.
+Unavailable values show a dash. `DPI#` is a stage number. The numeric DPI
+widget uses device status over USB and the read-back DPI table over 2.4 GHz.
 
 Portable examples:
 

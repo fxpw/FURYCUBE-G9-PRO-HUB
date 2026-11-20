@@ -71,7 +71,8 @@ input check passed 9/9 and all six readable settings records matched the
 USB backup.
 
 Production sends 56-byte OLED feature calls with a 500 ms gap after each
-fragment. It requires OL9 and active profile 1 and verifies both on the
-open receiver session. Version, profile and sensor reads retain their
-134-byte prepare framing. The numeric DPI widget uses the sensor record
-on 2.4 GHz.
+fragment. Stream discovery verifies OL9 and active profile 1 once per
+receiver session. The mouse checks the active profile in its carrier
+handler. Version, profile and sensor reads retain their 134-byte prepare
+framing. The HUB renders numeric DPI from the read-back sensor settings
+and passive DPI-stage notifications. Periodic frames skip control reads.

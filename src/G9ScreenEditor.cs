@@ -8,6 +8,7 @@ using System.Windows.Forms;
 using Furycube.G9.Screen;
 using Furycube.G9.Sensors;
 using Furycube.G9.Oled;
+using Furycube.G9.Telemetry;
 
 internal sealed partial class G9ScreenEditor : UserControl {
     Exception lastUploadError;
@@ -46,11 +47,13 @@ internal sealed partial class G9ScreenEditor : UserControl {
     readonly Action<string> report;
     readonly Func<byte[],Task<string>> sendFrame;
     readonly Func<Task<OledRuntimeStatus>> readRuntimeStatus;
+    readonly Func<TelemetrySnapshot,int?> readCachedRadioDpi;
     OledRuntimeStatus runtimeStatus;
     Button upload;
     readonly CheckBox live=new CheckBox {Text="Обновлять OLED автоматически",AutoSize=true};
     bool uploading;
     bool transportAvailable=true;
+    bool radioTransport;
     int transportEpoch,uploadSerial;
     string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9 на профиле 1. Живые данные обновляются, пока HUB открыт.";
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
@@ -81,8 +84,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
         internal GeometrySlider(string value){title=value;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
         internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+" px";}
     }
-    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true){
-        report=logger;sendFrame=frameSender;readRuntimeStatus=runtimeStatusReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
+    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null){
+        report=logger;sendFrame=frameSender;readRuntimeStatus=runtimeStatusReader;readCachedRadioDpi=cachedRadioDpiReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
         backgroundServicesEnabled=backgroundServices;
         autosaveFile=savedEditorFile??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
         resumeFrameFile=autosaveFile+".last-frame";
@@ -241,7 +244,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
     void RemoveLayer(){LayerItem selected=SelectedLayer();if(selected==null)return;if(selected.Image){project.ImageFile=null;project.ImageX=project.ImageY=project.ImageWidth=project.ImageHeight=0;if(project.Composition!=CompositionMode.Widgets)project.Composition=CompositionMode.Widgets;}else project.Widgets.Remove(selected.Widget);SyncControls(null,false);Changed();}
     int? FreshConfiguredDpi(){return runtimeStatus!=null&&runtimeStatus.IsValid&&!runtimeStatus.IsBusy&&runtimeStatus.IsFresh(DateTimeOffset.UtcNow)&&runtimeStatus.ConfiguredDpi.HasValue?(int?)runtimeStatus.ConfiguredDpi.Value:null;}
     bool UsesNumericDpi(){if(project.Composition==CompositionMode.Image)return false;foreach(var widget in project.Widgets)if(widget.Kind==WidgetKind.Dpi)return true;return false;}
-    WidgetContext Context(){var mouse=telemetry.Snapshot;return new WidgetContext {Now=DateTime.Now,CultureName=project.CultureName,BatteryPercent=mouse==null?null:(double?)mouse.BatteryPercent,Dpi=FreshConfiguredDpi(),DpiStage=mouse==null?null:mouse.DpiStage,CpuPercent=snapshot==null?null:snapshot.CpuUsagePercent,RamPercent=snapshot==null?null:snapshot.RamUsagePercent,GpuPercent=snapshot==null?null:snapshot.GpuUsagePercent,CpuTemperatureC=snapshot==null?null:snapshot.CpuTemperatureCelsius,GpuTemperatureC=snapshot==null?null:snapshot.GpuTemperatureCelsius};}
+    WidgetContext Context(){var mouse=telemetry.Snapshot;return new WidgetContext {Now=DateTime.Now,CultureName=project.CultureName,BatteryPercent=mouse==null?null:(double?)mouse.BatteryPercent,Dpi=radioTransport && readCachedRadioDpi!=null?readCachedRadioDpi(mouse):FreshConfiguredDpi(),DpiStage=mouse==null?null:mouse.DpiStage,CpuPercent=snapshot==null?null:snapshot.CpuUsagePercent,RamPercent=snapshot==null?null:snapshot.RamUsagePercent,GpuPercent=snapshot==null?null:snapshot.GpuUsagePercent,CpuTemperatureC=snapshot==null?null:snapshot.CpuTemperatureCelsius,GpuTemperatureC=snapshot==null?null:snapshot.GpuTemperatureCelsius};}
     async Task RefreshSensors(){if(sampling||IsDisposed||disposedEditor)return;sampling=true;try{snapshot=await Task.Run(()=>sensors.Sample());if(!IsDisposed&&!disposedEditor)Render();}catch(Exception e){if(!IsDisposed&&!disposedEditor)info.Text="Датчики: "+e.Message;}finally{sampling=false;}}
     void ApplyPreset(int index){
         project.Composition=CompositionMode.Widgets;project.Widgets.Clear();int half=Math.Max(1,project.Width/2),top=Math.Max(1,project.Height/2),bottom=Math.Max(1,project.Height-top);
@@ -282,9 +285,9 @@ internal sealed partial class G9ScreenEditor : UserControl {
         if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";Render();return;}
         lastUploadError=null;uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
         try{
-            // STATUS is requested only by an explicit upload/live tick which
-            // actually renders numeric DPI. Preview/sensors never query it.
-            if(UsesNumericDpi()&&readRuntimeStatus!=null) {
+            // Radio rendering uses the checked settings snapshot and passive
+            // notifications to avoid competing with mouse input.
+            if(!radioTransport&&UsesNumericDpi()&&readRuntimeStatus!=null) {
                 var received=await readRuntimeStatus();
                 if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;runtimeStatus=received;
             }
@@ -324,7 +327,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         transportAvailable=false;bool previous=syncing;syncing=true;try{live.Checked=false;}finally{syncing=previous;}live.Enabled=false;upload.Enabled=false;
         oledNote=reason;Render();return wasLive;
     }
-    internal void AllowDevice() {if(IsDisposed||disposedEditor)return;if(backgroundServicesEnabled)telemetry.Start();transportAvailable=true;live.Enabled=upload.Enabled=sendFrame!=null;}
+    internal void AllowDevice(bool radio=false) {if(IsDisposed||disposedEditor)return;if(backgroundServicesEnabled)telemetry.Start();radioTransport=radio;transportAvailable=true;live.Enabled=upload.Enabled=sendFrame!=null;}
     internal async Task ResumeLive() {
         if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null)return;
         bool previous=syncing;syncing=true;try {live.Checked=true;}finally {syncing=previous;}

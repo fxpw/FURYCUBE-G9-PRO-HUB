@@ -166,6 +166,7 @@ internal sealed class G9MouseSettingsEditor : UserControl {
     readonly List<SettingRow> rows = new List<SettingRow>();
     readonly ToolTip tips = new ToolTip { AutoPopDelay=16000 };
     G9SettingsSnapshot snapshot;
+    internal G9SettingsSnapshot CurrentSnapshot { get { return snapshot; } }
     byte[] pendingKeys;
     bool busy;
     bool startupTouched;
