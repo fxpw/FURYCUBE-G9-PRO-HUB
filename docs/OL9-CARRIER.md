@@ -57,6 +57,8 @@ The disabled updater SHA256 is
 
 OL9 was installed over USB on 2026-11-20. The radio frame submission left the
 physical display at 1600, with input and saved settings verified afterward.
+The owner confirmed a visible screen change when the same frame was sent
+through USB to the same OL9 installation.
 The [candidate matrix](RF-CANDIDATE-MATRIX.md) records the physical test and the
 replay of its exact reports. Actual receiver delivery and firmware recovery
 still need verification.

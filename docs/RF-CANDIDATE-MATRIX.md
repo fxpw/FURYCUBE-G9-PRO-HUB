@@ -60,8 +60,10 @@ The exact twelve captured reports replayed successfully against the sealed OL9
 mouse firmware with context kind 0, for both tested selector values. The model
 assembled the exact host frame and emitted all twelve display transfers. It
 rejected both kind 1 cases. The model supplies the radio fragments directly;
-the context used by the physical receiver remains unknown. A same-image USB
-control on OL9 can narrow the next investigation to the radio delivery path.
+the context used by the physical receiver remains unknown. The owner confirmed
+that the same frame appeared on the same OL9 installation over USB. The next
+radio comparison changes the feature-call length from 134 to 56 bytes while
+preserving the carrier bytes.
 
 The last fully verified logical profile is 117 bytes with SHA256
 `7ffa0a87f04a79e52b4f4a519485f0ddbc0098ca5c9f94c0e8dcf8a2cea8d643`:
