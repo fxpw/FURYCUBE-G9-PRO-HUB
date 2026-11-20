@@ -345,6 +345,7 @@ internal sealed partial class G9Hub : Form {
         base.OnShown(e);
         if(startupReadStarted)return;startupReadStarted=true;
         if(startMinimized)HideToTray();
+        else ShowVue();
         try {resumeReady=await ScanDevice(null,true) && resumeOled.Checked;if(!deviceChangePending)await ResumeWhenReady();}
         finally {startupScanComplete=true;}
     }
@@ -398,7 +399,8 @@ internal sealed partial class G9Hub : Form {
         } finally {if(!closing && !IsDisposed && generation==deviceGeneration)foreach(var button in actions)button.Enabled=true;}
     }
     void HideToTray() {if(closing)return;ShowInTaskbar=false;Hide();}
-    void ShowHub() {if(closing)return;ShowInTaskbar=true;WindowState=FormWindowState.Normal;Show();Activate();}
+    partial void ShowVue();
+    void ShowHub() {if(closing)return;ShowInTaskbar=true;WindowState=FormWindowState.Normal;Show();Activate();ShowVue();}
     protected override void OnFormClosing(FormClosingEventArgs e) {
         if(e.CloseReason==CloseReason.UserClosing && !exitRequested) {e.Cancel=true;HideToTray();return;}
         base.OnFormClosing(e);

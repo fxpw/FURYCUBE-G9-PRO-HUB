@@ -13,6 +13,7 @@ using Furycube.G9.Macros;
 
 internal sealed partial class G9Hub {
     WebView2 vue;
+    string vueFolder;
     System.Windows.Forms.Timer vueTimer;
     bool vueBusy;
     string vueFirmware;
@@ -32,31 +33,46 @@ internal sealed partial class G9Hub {
     internal void EnableVue() {
         string folder=Path.Combine(root,"frontend","dist");
         if(!File.Exists(Path.Combine(folder,"index.html")))throw new FileNotFoundException("Не собран Vue-интерфейс. Запустите tools\\build-vue-hub.cmd.");
-        vue=new WebView2 {Dock=DockStyle.Fill,DefaultBackgroundColor=Color.FromArgb(18,20,25),CreationProperties=new CoreWebView2CreationProperties{UserDataFolder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","webview")}};
-        // Keep the tested controllers alive underneath the Vue view. Their
-        // timers, device gate, telemetry and autosave retain one owner.
-        foreach(Control legacy in Controls)legacy.Visible=false;
-        var cover=new Panel{Dock=DockStyle.Fill,BackColor=Color.FromArgb(18,20,25)};cover.Controls.Add(vue);Controls.Add(cover);cover.BringToFront();Padding=new Padding(0);MinimumSize=new Size(1040,720);Width=1280;Height=860;
-        Shown+=async delegate {
-            try {
-                await vue.EnsureCoreWebView2Async();
-                var core=vue.CoreWebView2;
-                core.Settings.AreDefaultContextMenusEnabled=false;core.Settings.AreDevToolsEnabled=Environment.GetEnvironmentVariable("G9_HUB_DEVTOOLS")=="1";
-                core.Settings.IsStatusBarEnabled=false;
-                core.SetVirtualHostNameToFolderMapping("g9.local",folder,CoreWebView2HostResourceAccessKind.DenyCors);
-                core.NavigationStarting+=delegate(object sender,CoreWebView2NavigationStartingEventArgs e){if(!G9WebApi.TrustedOrigin(e.Uri))e.Cancel=true;};
-                core.NewWindowRequested+=delegate(object sender,CoreWebView2NewWindowRequestedEventArgs e){e.Handled=true;};
-                core.PermissionRequested+=delegate(object sender,CoreWebView2PermissionRequestedEventArgs e){e.State=CoreWebView2PermissionState.Deny;};
-                core.WebMessageReceived+=VueMessage;
-                core.Navigate("https://g9.local/index.html");
-                vueTimer=new System.Windows.Forms.Timer{Interval=1000};vueTimer.Tick+=async delegate{
-                    if(closing||vueBusy)return;
-                    if(startupScanComplete&&latestDeviceRead!=null&&!vueVersionReading&&vueFirmwareAttempt!=deviceGeneration){try{await VueReadFirmware();}catch(Exception error){Append("Версия прошивки: "+error.Message);}}
-                    if(!closing&&!vueBusy)VueEvent();
-                };vueTimer.Start();
-            }catch(Exception error){cover.Visible=false;Append("Vue-интерфейс не запущен: "+error.Message);MessageBox.Show(this,error.Message,"Интерфейс HUB",MessageBoxButtons.OK,MessageBoxIcon.Error);}
-        };
+        vueFolder=folder;
+        Padding=new Padding(0);MinimumSize=new Size(1040,720);Width=1280;Height=860;
         Disposed+=delegate{if(vueTimer!=null){vueTimer.Stop();vueTimer.Dispose();}if(vue!=null)vue.Dispose();};
+    }
+    partial void ShowVue() {
+        if(vueFolder!=null && vue==null && Visible) InitializeVue();
+    }
+    async void InitializeVue() {
+        Panel cover=null;
+        try {
+            vue=new WebView2 {Dock=DockStyle.Fill,DefaultBackgroundColor=Color.FromArgb(18,20,25),CreationProperties=new CoreWebView2CreationProperties{UserDataFolder=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","webview")}};
+            // Background controllers run independently of WebView2, including
+            // when the first show is deferred by a minimized startup.
+            cover=new Panel{Dock=DockStyle.Fill,BackColor=Color.FromArgb(18,20,25)};
+            cover.Controls.Add(vue);Controls.Add(cover);cover.BringToFront();
+            await vue.EnsureCoreWebView2Async();
+            if(closing || IsDisposed)return;
+            var core=vue.CoreWebView2;
+            core.Settings.AreDefaultContextMenusEnabled=false;core.Settings.AreDevToolsEnabled=Environment.GetEnvironmentVariable("G9_HUB_DEVTOOLS")=="1";
+            core.Settings.IsStatusBarEnabled=false;
+            core.SetVirtualHostNameToFolderMapping("g9.local",vueFolder,CoreWebView2HostResourceAccessKind.DenyCors);
+            core.NavigationStarting+=delegate(object sender,CoreWebView2NavigationStartingEventArgs e){if(!G9WebApi.TrustedOrigin(e.Uri))e.Cancel=true;};
+            core.NewWindowRequested+=delegate(object sender,CoreWebView2NewWindowRequestedEventArgs e){e.Handled=true;};
+            core.PermissionRequested+=delegate(object sender,CoreWebView2PermissionRequestedEventArgs e){e.State=CoreWebView2PermissionState.Deny;};
+            core.WebMessageReceived+=VueMessage;
+            core.Navigate("https://g9.local/index.html");
+            vueTimer=new System.Windows.Forms.Timer{Interval=1000};vueTimer.Tick+=async delegate{
+                if(closing||vueBusy)return;
+                if(startupScanComplete&&latestDeviceRead!=null&&!vueVersionReading&&vueFirmwareAttempt!=deviceGeneration){try{await VueReadFirmware();}catch(Exception error){Append("Версия прошивки: "+error.Message);}}
+                if(!closing&&!vueBusy)VueEvent();
+            };vueTimer.Start();
+            foreach(Control legacy in Controls)if(legacy!=cover)legacy.Visible=false;
+        }catch(Exception error){
+            if(closing || IsDisposed)return;
+            if(vueTimer!=null){vueTimer.Dispose();vueTimer=null;}
+            if(cover!=null)cover.Dispose();else if(vue!=null)vue.Dispose();
+            vue=null;
+            Append("Vue-интерфейс не запущен: "+error.Message);
+            if(Visible)MessageBox.Show(this,error.Message,"Интерфейс HUB",MessageBoxButtons.OK,MessageBoxIcon.Error);
+        }
     }
     T FindController<T>(Control current) where T:Control {if(current is T)return (T)current;foreach(Control child in current.Controls){T result=FindController<T>(child);if(result!=null)return result;}return null;}
     G9MacroEditor VueMacros {get{var result=FindController<G9MacroEditor>(this);if(result==null)throw new InvalidOperationException("Редактор макросов недоступен.");return result;}}
