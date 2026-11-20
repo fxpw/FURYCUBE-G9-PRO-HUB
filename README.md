@@ -21,13 +21,13 @@ identified development mouse, not every device sold under the same name.
 | DPI, sensor and power settings | Complete wired reads and a timer write/restore were physically checked. Other setters have offline coverage. |
 | Settings over 2.4 GHz | The updated Windows client read the profile, DPI, polling and buttons on DG4, and all six archived records matched the USB backup. Earlier OL4 polling writes passed CLI and Vue checks with restoration. Power timers and debounce require USB. See [radio settings](docs/RADIO-SETTINGS.md). |
 | Custom OLED on OL4 | USB frames, numeric DPI and live clock/system widgets were confirmed while ordinary mouse input continued working. |
-| OL5 OLED and retained last frame | Installed on the development mouse; USB image and continued input were confirmed. The radio image did not appear and later configuration reads timed out, so receiver OLED is disabled in the native client and UI. Unplugging only USB with the switch already at 2.4 GHz loses the image. |
+| OL5 OLED and retained last frame | An earlier build with working USB image upload. Radio upload failed and unplugging USB cleared the image on the development mouse. |
 | OL6 carrier experiment | Earlier installation introduced a separate experimental client. The owner confirmed radio input but reported missing USB mouse input. It was superseded by OL7 before any image upload. |
 | OL7 USB input guard | Earlier installed build. A single USB image and continued input were confirmed after Windows restart; the radio input check passed 9/9. Ordinary radio reads later timed out before an image could be sent. |
 | DG2 diagnostic control | Earlier installed without custom OLED support to compare the original radio path. Complete USB settings matched all 117 saved bytes; both USB and radio input passed 9/9. Radio version queries still timed out, including through the OEM library. See [DG1/DG2 controls](docs/DG1-DG2-CONTROLS.md). |
 | DG3 RF state display | Earlier diagnostic build: USB input recovered without a PC reboot after an approved Interception bypass and passed 9/9. Radio input also passed 9/9, but the version query timed out and the display showed 9000. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
 | DG4 last-request diagnostic | Previous diagnostic build. USB and radio input passed 9/9. A complete settings read passed over radio after the client adopted asynchronous I/O. See [DG4 diagnostic](docs/DG4-RADIO-DIAGNOSTIC.md). |
-| OL9 radio OLED experiment | Installed. After one radio frame submission the screen still showed 1600. Radio input passed 9/9 and the settings matched the USB backup. OL8 remains an offline candidate. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
+| OL9 radio OLED | The same frame appeared over USB and over 2.4 GHz with 56-byte feature calls. Radio input passed 9/9 and the settings matched the USB backup. The HUB enables this path on active profile 1. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
 | PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
 | Firmware recovery | Configuration backups exist; a complete installed-firmware dump and independent rollback remain unverified. |
@@ -39,29 +39,17 @@ has not been isolated. The later OL5 experiment preserves that guard and passed
 an ordinary-input and single-USB-frame check. The HUB does not install firmware
 automatically.
 
-The current hardware milestone is a visible control image over 2.4 GHz.
-The managed client now opens the receiver in asynchronous mode, reads feature
-reports with an explicit input buffer and sends the receiver's full 134-byte
-USB buffer. The PC-side frame cache and reconnect path are
-implemented, while ordinary receiver OLED remains disabled pending end-to-end
-qualification. One OL7 USB image is now physically confirmed; its radio image
-could not be tested because discovery timed out. DG2, a control image without
-custom OLED, also reproduced the ordinary configuration timeout. The DG3
-USB input failure was recovered by bypassing
-Interception in the G9 stack, with the original global registration restored.
-The same firmware then passed the input check without a PC reboot.
-The subsequently installed DG4 diagnostic also passed USB input after that
-recovery and a separate radio input check. The asynchronous polling probe and
-the integrated settings read both passed on DG4. OL9 is now installed with
-the complete USB profile restored and wired input verified. The Vue host skips
-its automatic radio version query. See the [receiver transport results](docs/OEM-FIRST-RADIO-READ.md).
-See [Windows input recovery](docs/WINDOWS-INPUT-RECOVERY.md).
-The brief screen change reported
-at startup has not been identified as host traffic or a firmware redraw.
-See [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
-The [OEM receiver framing audit](docs/OEM-RECEIVER-FRAMING.md) documents the
-original library's transport and the bounded comparisons with it. Matching its
-134-byte prepare buffer alone did not resolve the current radio timeout.
+The current receiver uses asynchronous feature reads. Settings queries
+use 134-byte prepare buffers, while OL9 OLED fragments use 56-byte feature
+calls. The tested 500 ms pacing takes about six seconds per radio frame,
+plus any widget data reads. The numeric DPI widget reads the sensor record
+over radio. See the [receiver transport results](docs/OEM-FIRST-RADIO-READ.md)
+and [OL9 carrier protocol](docs/OL9-CARRIER.md).
+
+The earlier DG3 USB input failure recovered without a PC reboot after a
+temporary Interception bypass for the G9 stack. The original Windows
+registration was restored. See [Windows input recovery](docs/WINDOWS-INPUT-RECOVERY.md)
+and [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
 
 ## Quick input check
 
@@ -180,16 +168,16 @@ Portable examples:
 | [Clock, DPI and system](examples/screens/clock-dpi-system.g9screen.json) | Clock, numeric DPI, CPU and RAM |
 | [Positioned image](examples/screens/positioned-image.g9screen.json) | An 84 × 20 image at X=18, Y=4, with its bundled asset |
 
-**Physically verified OLED upload currently covers OL4 and OL5 over USB.** Stock
-firmware does not advertise the extension; native OL2/OL3 image writes are blocked
-because their long-packet assembly failure was reproduced. Receiver OLED upload/live is currently
-disabled after a failed delivery test; image submission to Windows alone did
-not establish forwarding by the receiver. Connect the mouse by USB for OLED.
+**OLED images require OL4 or later over USB, or OL9 with active profile 1 over
+2.4 GHz.** Physical uploads have been confirmed on the development mouse over
+both connections. Native OL2/OL3 image writes are disabled after a reproduced
+long-packet assembly failure.
 
-On current OL4, native redraws, sleep and connection changes can replace or clear
-a custom image. Keeping the last frame across modes or power loss is not yet
-supported. Live widgets require the HUB and the supported connection. Errors stop
-updates without blind retries. See [OL4 transport](docs/OLED-USB-CHUNKS.md),
+Native redraws, sleep and connection changes can replace or clear a custom
+image. The HUB can resend its cached frame after reconnecting. Keeping a frame
+through power loss on the mouse itself remains unverified. Live widgets require
+a running HUB. Errors stop updates without repeating the failed frame.
+See [OL4 transport](docs/OLED-USB-CHUNKS.md),
 [stock redraw behaviour](docs/OLED-REDRAW.md) and the
 [experimental retention design](docs/OLED-RETENTION-DESIGN.md).
 

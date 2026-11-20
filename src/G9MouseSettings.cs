@@ -155,6 +155,10 @@ namespace Furycube.G9.Settings
             return new MouseSettingsProfile(profile,MouseSettingsSourceKind.FirmwareSettingsRecords,null,
                 DecodeSensor(sensor52,profile),null,DecodePolling(polling9,profile));
         }
+        internal static MouseSettingsProfile DecodeSensorProfile(int profile, byte[] sensor52) {
+            return new MouseSettingsProfile(profile, MouseSettingsSourceKind.FirmwareSettingsRecords, null,
+                DecodeSensor(sensor52, profile), null, null);
+        }
         public static bool SameSettings(MouseSettingsProfile a,MouseSettingsProfile b) {
             if(a==null||b==null||a.ProfileId!=b.ProfileId)return false;
             if(a.IsCompleteProfile&&b.IsCompleteProfile) return SameBytes(a.GetBodyCopy(),b.GetBodyCopy());

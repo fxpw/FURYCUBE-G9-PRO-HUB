@@ -99,8 +99,8 @@ export const english: Record<string, string> = {
   "Загрузка CPU": "CPU usage",
   "Загрузка GPU": "GPU usage",
   "Загрузка RAM": "RAM usage",
-  "Загрузка OLED сейчас доступна по USB с OL4 или OL5. Передача через приёмник временно отключена. Текущая:":
-    "OLED upload is currently available over USB with OL4 or OL5. Receiver transfers are temporarily disabled. Current firmware:",
+  "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9 и активный профиль 1. Текущая прошивка:":
+    "OLED over USB requires OL4 or later. 2.4G requires OL9 and active profile 1. Current firmware:",
   "Заданное количество": "Repeat count",
   "Закрыть уведомление": "Dismiss notification",
   "Заменить изображение": "Replace image",

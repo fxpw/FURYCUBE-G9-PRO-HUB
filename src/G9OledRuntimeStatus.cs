@@ -23,6 +23,15 @@ namespace Furycube.G9.Oled {
     public static class OledRuntimeStatusCodec {
         public const int FeatureBytes = 132;
         public static byte[] BuildReadRequest(bool shortReport = false) { return new byte[] { 0xA0, 0x22, shortReport ? (byte)64 : (byte)132, 0, 0, 0, 0, 0 }; }
+        internal static byte[] EncodeConfiguredDpi(byte profile, byte stage, ushort dpi) {
+            var data = new byte[64];
+            byte[] header = { 0x22, 64, (byte)'G', (byte)'S', 4, 1, profile, stage, (byte)dpi, (byte)(dpi >> 8) };
+            Buffer.BlockCopy(header, 0, data, 0, header.Length);
+            ushort crc = OledProtocol.Crc16CcittFalse(data, 0, 62);
+            data[62] = (byte)crc;
+            data[63] = (byte)(crc >> 8);
+            return data;
+        }
         static void Require(bool condition, string message) { if (!condition) throw new FormatException(message); }
         public static OledRuntimeStatus Decode(byte[] frame, DateTimeOffset receivedAtUtc) {
             Require(frame != null && (frame.Length == FeatureBytes || frame.Length == 64), "Invalid OLED status length");

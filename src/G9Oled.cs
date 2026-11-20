@@ -14,8 +14,8 @@ namespace Furycube.G9.Oled {
         public int BufferBytes { get { return 480; } }
         public string Extension { get; private set; }
         public bool SupportsRuntimeStatus { get { return Extension == "OL3" || SupportsShortWrites; } }
-        public bool SupportsShortWrites { get { return Extension == "OL4" || SupportsRadioWrites; } }
-        public bool SupportsRadioWrites { get { return Extension == "OL5" || Extension == "OL6" || Extension == "OL7" || Extension == "OL8" || Extension == "OL9"; } }
+        public bool SupportsShortWrites { get { return Extension[2] >= '4'; } }
+        public bool SupportsRadioWrites { get { return Extension == "OL9"; } }
         internal FirmwareCapabilities(byte major, byte minor, string extension) { VersionMajor = major; VersionMinor = minor; Extension = extension; }
     }
 
@@ -49,7 +49,7 @@ namespace Furycube.G9.Oled {
             ValidateDevice(vendor, product);
             if (capabilities == null) throw new InvalidOperationException("Verified OLED discovery is required");
             if (product == 0xFA60 && !capabilities.SupportsRadioWrites)
-                throw new NotSupportedException("OLED through the 2.4 GHz receiver requires OL5; no image or status report was sent");
+                throw new NotSupportedException("OLED through the 2.4 GHz receiver requires OL9; no image or status report was sent");
         }
 
         public static ushort Crc16CcittFalse(byte[] bytes, int offset, int length) {
@@ -203,8 +203,15 @@ namespace Furycube.G9.Oled {
                 // Validate and build ALL pages first: a bad final-page tail cannot cause a partial write.
                 byte[][] reports = capabilities.SupportsShortWrites ? OledShortProtocol.BuildFrameReports(pixels, !displayInitialized) :
                     OledProtocol.BuildFrameReports(pixels, !displayInitialized); int sent = 0;
-                int interval = discoveredProduct == 0xFA60 ? 75 : 25;
-                try { foreach (byte[] report in reports) { ValidateIdentity(); transport.SendFeature(report); sent++; if (sent < reports.Length) wait(interval); } }
+                bool radio = discoveredProduct == 0xFA60;
+                try {
+                    foreach (byte[] report in reports) {
+                        ValidateIdentity(); transport.SendFeature(report); sent++;
+                        // The receiver needs the verified gap after the last
+                        // fragment too, before the next frame or settings read.
+                        if (radio || sent < reports.Length) wait(radio ? 500 : 25);
+                    }
+                }
                 catch { capabilities = null; displayInitialized = false; throw; }
                 displayInitialized = true;
                 // USB submission is not a firmware acknowledgement or proof of visible pixels.

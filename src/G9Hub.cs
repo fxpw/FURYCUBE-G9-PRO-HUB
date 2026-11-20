@@ -542,7 +542,7 @@ internal sealed partial class G9Hub : Form {
                 throw new TimeoutException("Мышь не завершила операцию за " + (timeout/1000) + " секунд. Перечитайте её настройки.");
             }
             process.WaitForExit();
-            if (process.ExitCode == 4) throw new InvalidOperationException("Выбранная операция OLED не поддерживается прошивкой мыши. Для картинки нужны OL4 и USB-кабель; кадр не отправлен.");
+            if (process.ExitCode == 4) throw new InvalidOperationException("Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9 и активный профиль 1.");
             if (process.ExitCode != 0) throw new InvalidOperationException(errors.Length > 0 ? errors.ToString().Trim() : "G9Device завершил операцию с ошибкой; подробности в журнале.");
             success = true;
             return output.ToString();

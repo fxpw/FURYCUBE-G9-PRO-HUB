@@ -428,7 +428,7 @@ test("radio settings allow qualified edits and show unknown power without invent
   );
 });
 
-for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OL9"]) {
+for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8"]) {
   test(`${revision} radio permits editor but blocks unqualified OLED upload and live`, async ({
     page,
   }) => {
@@ -447,11 +447,11 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OL9"]) {
       page.getByLabel("Обновлять в реальном времени"),
     ).toBeDisabled();
     await expect(
-      page.getByText(/Передача через приёмник временно отключена/),
+      page.getByText(/Для 2.4G нужна OL9 и активный профиль 1/),
     ).toBeVisible();
     await page.locator(".language-control select").selectOption("en");
     await expect(
-      page.getByText(/Receiver transfers are temporarily disabled/),
+      page.getByText(/2.4G requires OL9 and active profile 1/),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Upload to OLED", exact: true }),
@@ -460,8 +460,32 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OL9"]) {
   });
 }
 
+test("OL9 radio allows OLED only on active profile 1", async ({ page }) => {
+  await desktop(page);
+  await page.evaluate(() => {
+    const n = (window as any).__native;
+    n.state.device.connection = "radio";
+    n.state.device.firmware = "1.08 / OL9";
+    n.state.device.profile = 2;
+    (window as any).__pushState();
+  });
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  const upload = page.getByRole("button", { name: "На OLED", exact: true });
+  const live = page.getByLabel("Обновлять в реальном времени");
+  await expect(upload).toBeDisabled();
+  await expect(live).toBeDisabled();
+  await page.evaluate(() => {
+    (window as any).__native.state.device.profile = 1;
+    (window as any).__pushState();
+  });
+  await expect(upload).toBeEnabled();
+  await expect(live).toBeEnabled();
+  await upload.click();
+  expect(await requests(page, "screen.upload")).toHaveLength(1);
+});
+
 for (const revision of ["OL7", "OL8", "OL9"]) {
-  test(`${revision} USB permits a guarded control upload without enabling radio`, async ({
+  test(`${revision} USB permits a guarded control upload`, async ({
     page,
   }) => {
     await desktop(page);

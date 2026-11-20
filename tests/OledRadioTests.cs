@@ -6,7 +6,7 @@ using Furycube.G9.Oled;
 internal static class OledRadioTests {
     sealed class Session : IOledDeviceSession, IOledRuntimeStatusDeviceSession {
         internal ushort Vendor = 0x1D57, Product = 0xFA60;
-        internal char Revision = '5';
+        internal char Revision = '9';
         internal int Versions, Writes, StatusReads, FailWrite;
         internal Action DuringVersion;
         internal byte[] Status = StatusFrame();
@@ -23,7 +23,7 @@ internal static class OledRadioTests {
     static byte[] StatusFrame() { var data=new byte[64];data[0]=0x22;data[1]=64;data[2]=71;data[3]=83;data[4]=4;data[5]=1;data[6]=1;data[7]=2;data[8]=0x40;data[9]=6;ushort crc=OledProtocol.Crc16CcittFalse(data,0,62);data[62]=(byte)crc;data[63]=(byte)(crc>>8);return data; }
     static int Main() { try {
         var frame=new byte[480];for(int i=0;i<480;i++)frame[i]=(byte)(i&(i<360?255:15));
-        foreach(char revision in new[]{'2','3','4','0'}) {
+        foreach(char revision in new[]{'2','3','4','5','6','7','8','0'}) {
             var old=new Session{Revision=revision};var transport=new NativeOledTransport(old);var sender=new OledSender(transport,delegate(int ms){});
             Reject(delegate{sender.Discover();},"old radio firmware rejected "+revision);
             Reject(delegate{sender.WriteFrame(frame);},"no writes after rejected radio discovery "+revision);
@@ -32,10 +32,10 @@ internal static class OledRadioTests {
         }
         var device=new Session();var adapter=new NativeOledTransport(device);var delays=new List<int>();var upload=new OledSender(adapter,delays.Add);
         Reject(delegate{adapter.SendFeature(OledShortProtocol.BuildWriteChunk(0,0,new byte[40]));},"radio cannot write before discovery");
-        var caps=upload.Discover();Check(caps.Extension=="OL5"&&caps.SupportsRadioWrites&&caps.SupportsShortWrites&&caps.SupportsRuntimeStatus,"OL5 capabilities on exact receiver session");
+        var caps=upload.Discover();Check(caps.Extension=="OL9"&&caps.SupportsRadioWrites&&caps.SupportsShortWrites&&caps.SupportsRuntimeStatus,"OL9 capabilities on exact receiver session");
         Check(device.Versions==1&&device.Writes==0,"discovery itself has no image side effect");
-        Check(upload.ReadRuntimeStatusFrame().Length==64&&device.StatusReads==1,"OL5 uses strict existing GS4 codec");
-        upload.WriteFrame(frame);Check(device.Writes==12&&delays.Count==11&&delays.TrueForAll(delegate(int value){return value==75;}),"receiver pacing has twelve chunks and eleven75ms gaps");
+        Check(upload.ReadRuntimeStatusFrame().Length==64&&device.StatusReads==1,"OL9 uses strict existing status codec on the host");
+        upload.WriteFrame(frame);Check(device.Writes==12&&delays.Count==12&&delays.TrueForAll(delegate(int value){return value==500;}),"receiver paces twelve chunks including a gap after the last chunk");
         var reconstructed=new byte[480];for(int n=0;n<12;n++){byte[] p=device.Reports[n];OledShortProtocol.ValidateWriteChunk(p);Check(p[7]==n/3&&p[8]==(n%3)*40,"ordered receiver chunk "+n);Buffer.BlockCopy(p,12,reconstructed,n*40,40);}
         Check(Convert.ToBase64String(frame)==Convert.ToBase64String(reconstructed),"receiver transport preserves all480 bytes");
         device.Product=0x2148;Reject(delegate{upload.WriteFrame(frame);},"stale receiver sender cannot become wired sender");Check(device.Writes==12,"changed identity sends no further chunk");
@@ -45,6 +45,6 @@ internal static class OledRadioTests {
         var corrupt=new Session();corrupt.Status[8]^=1;var invalid=new OledSender(new NativeOledTransport(corrupt));invalid.Discover();Reject(delegate{invalid.ReadRuntimeStatusFrame();},"bad radio status CRC invalidates discovery");Reject(delegate{invalid.WriteFrame(frame);},"bad status forbids later image traffic");Check(corrupt.Writes==0,"bad status sends no image");
         var boot=new Session{Vendor=0xA745,Product=0x0033};Reject(delegate{new OledSender(new NativeOledTransport(boot)).Discover();},"bootloader rejected before version query");Check(boot.Versions==0,"no bootloader traffic");
         var wired=new Session{Product=0x2148,Revision='4'};var wiredDelays=new List<int>();var legacy=new OledSender(new NativeOledTransport(wired),wiredDelays.Add);legacy.Discover();legacy.WriteFrame(frame);Check(wired.Writes==12&&wiredDelays.TrueForAll(delegate(int value){return value==25;}),"OL4 wired path retains25ms pacing");
-        Console.WriteLine("PASS "+checks+" OL5 receiver capability, identity, frame, status and failure checks; fake sessions only.");return 0;
+        Console.WriteLine("PASS "+checks+" OL9 receiver capability, identity, frame, status and failure checks; fake sessions only.");return 0;
     } catch(Exception error){Console.Error.WriteLine(error);return 1;} }
 }

@@ -48,11 +48,11 @@ internal sealed partial class G9ScreenEditor : UserControl {
     readonly Func<Task<OledRuntimeStatus>> readRuntimeStatus;
     OledRuntimeStatus runtimeStatus;
     Button upload;
-    readonly CheckBox live=new CheckBox {Text="Обновлять OLED каждую секунду",AutoSize=true};
+    readonly CheckBox live=new CheckBox {Text="Обновлять OLED автоматически",AutoSize=true};
     bool uploading;
     bool transportAvailable=true;
     int transportEpoch,uploadSerial;
-    string oledNote="Картинки и виджеты передаются по USB с прошивкой OL4. Совместимость проверяется перед отправкой. Живые данные обновляются, пока HUB открыт.";
+    string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9 на профиле 1. Живые данные обновляются, пока HUB открыт.";
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
     readonly TabControl editingTabs=new TabControl {Dock=DockStyle.Fill};
     readonly string autosaveFile;
@@ -105,7 +105,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         AddButton(second,"Выбрать картинку…",ChooseImage,"PNG, JPG, BMP, GIF или TIFF. Картинку можно двигать и изменять в размерах.");
         AddButton(second,"Экспорт PNG",ExportPng,"Сохранить чёрно-белый кадр без оранжевой рамки выделения.");
         AddButton(second,"Экспорт .bin",ExportFrame,"Сохранить упакованный кадр для дальнейшей работы с устройством.");
-        upload=AddButton(second,"На OLED",async delegate{await UploadFrame();},"Проверить поддержку OL4 и передать текущий кадр по USB. Для автоматического обновления включи живой режим.");upload.Enabled=sendFrame!=null;
+        upload=AddButton(second,"На OLED",async delegate{await UploadFrame();},"Проверить совместимость и передать текущий кадр. Для автоматического обновления включи живой режим.");upload.Enabled=sendFrame!=null;
         var third=Flow();third.Controls.Add(live);live.Enabled=sendFrame!=null;tips.SetToolTip(live,"Для живых часов и показателей ПК. HUB должен работать. При ошибке обновление выключается. Возобновление при запуске включается отдельной настройкой HUB.");
         toolbar.Controls.Add(first);toolbar.Controls.Add(second);toolbar.Controls.Add(third);
         var split=new SplitContainer {Size=new Size(1040,440),Dock=DockStyle.Fill,Orientation=Orientation.Vertical,Panel1MinSize=300,Panel2MinSize=300,SplitterDistance=670,FixedPanel=FixedPanel.Panel2};

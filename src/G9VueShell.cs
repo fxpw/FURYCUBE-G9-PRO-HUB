@@ -109,7 +109,6 @@ internal sealed partial class G9Hub {
     }
     async Task VueReadFirmware() {
         if(latestDeviceRead==null)return;int generation=deviceGeneration;vueFirmwareAttempt=generation;
-        if(!latestDeviceRead.Wired){vueFirmware=null;vueFirmwareGeneration=-1;return;}
         vueVersionReading=true;
         try{
             string suffix=G9Startup.DeviceSuffix(selectedIdentity);

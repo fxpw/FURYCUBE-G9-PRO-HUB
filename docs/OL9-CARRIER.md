@@ -22,7 +22,7 @@ All offsets refer to the complete56-byte packet. The stock RF body excludes repo
 | 54 | Pixel39 |
 | 55 | Revision9; independently claims custom handler |
 
-The RF hook claims stage0 OR revision9 before the native setter. It then requires report04, exact RF RAM body pointer, length56, context kind0, RF state9, remaining0, sequence2, fixed fields, stage0, revision9, correct OEM sum and custom CRC, and both active/requested profile1. The common GO4 validator enforces page, X, count, initialization placement, and last-page pixel high-nibble rules. No production host guard is changed.
+The RF hook claims stage0 OR revision9 before the native setter. It then requires report04, exact RF RAM body pointer, length56, context kind0, RF state9, remaining0, sequence2, fixed fields, stage0, revision9, correct OEM sum and custom CRC, and both active/requested profile1. The common GO4 validator enforces page, X, count, initialization placement, and last-page pixel high-nibble rules.
 
 CRC validation saves the expected16-bit value, copies pixel54 into byte52, and invokes the seed-resetting contiguous CRC routine once over53 bytes. Reconstruction first preserves header fields, copies pixel54 to51, moves25..49 to26..50 backward, then moves10..23 to12..25 backward. Only then does it write the normal64-byte GO4 header, tail, and CRC for the shared staging/store/renderer.
 
@@ -60,13 +60,18 @@ physical display at 1600, with input and saved settings verified afterward.
 The owner confirmed a visible screen change when the same frame was sent
 through USB to the same OL9 installation.
 The [candidate matrix](RF-CANDIDATE-MATRIX.md) records the physical test and the
-replay of its exact reports. Actual receiver delivery and firmware recovery
-still need verification.
+replay of its exact reports. Independent firmware recovery remains unverified.
 
 The earlier, readback-verified DPI change through FA60 passed a 56-byte SET04
 buffer to Windows. The unsuccessful OL9 frame used a 134-byte buffer. The
-guarded frame CLI has a `--logical-feature-length` comparison mode for OL9
-only. It requires an explicit FA60 device path and sends the same carrier
-bytes through each 56-byte feature call. Version and profile discovery retain
-their qualified transport. The test isolates the length supplied to Windows;
-the receiver's on-wire behavior and the physical display still need testing.
+guarded frame CLI's `--logical-feature-length` comparison sent exactly the
+same twelve carrier payloads in 56-byte feature calls. The image reappeared
+on the OLED after the switch from USB had returned it to 1600. The passive
+input check passed 9/9 and all six readable settings records matched the
+USB backup.
+
+Production sends 56-byte OLED feature calls with a 500 ms gap after each
+fragment. It requires OL9 and active profile 1 and verifies both on the
+open receiver session. Version, profile and sensor reads retain their
+134-byte prepare framing. The numeric DPI widget uses the sensor record
+on 2.4 GHz.

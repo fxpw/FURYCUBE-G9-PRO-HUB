@@ -10,7 +10,7 @@ visually confirmed USB image. OL8 has passed offline checks.
 | --- | --- | --- | --- |
 | OL7 | Baseline with USB settings/input readiness guard |56-byte SET04, kind0, stage0, custom CRC/tag6 | Earlier installed; USB image/input confirmed. After physical reconnect GET0C worked, but sensor GET04 and later version probes timed out. Passive radio input passed 9/9; no radio image submitted. |
 | OL8 | Test whether the receiver supplies context kind1 | Same carrier; allow kind0/1 and reject2/255 | Full offline checks and bounded updater ready; not installed. |
-| OL9 | Test whether a receiver relays an envelope with the native sensor checksum |56-byte SET04 with OEM checksum50..51 plus custom CRC52..53/tag9 | Installed over USB. The receiver accepted 12 USB submissions, the display stayed at 1600, radio input passed 9/9, and the six readable settings records matched the USB backup. |
+| OL9 | Test whether a receiver relays an envelope with the native sensor checksum |56-byte SET04 with OEM checksum50..51 plus custom CRC52..53/tag9 | Installed over USB. The same radio frame failed with 134-byte feature calls and appeared on the display with 56-byte calls. Input passed 9/9 and all six settings records matched the USB backup. |
 
 OL8 changes exactly three compiled bytes relative to OL7: the version marker,
 kind comparison and rejection branch. OL9 is described in [its packet
@@ -19,8 +19,8 @@ do not explain or repair a failed ordinary GET0C transaction by themselves.
 
 All variants retain the ordinary screen-key fix, profile1 validation, native
 settings dispatch, complete-frame staging, pixel ownership and the USB EP2
-guard. Custom uploads do not add per-frame flash writes. The production HUB
-continues to block receiver OLED until end-to-end delivery is qualified.
+guard. Custom uploads do not add per-frame flash writes. The HUB enables
+receiver OLED on OL9 with active profile 1.
 
 ## Pinned artifacts
 
@@ -61,9 +61,12 @@ mouse firmware with context kind 0, for both tested selector values. The model
 assembled the exact host frame and emitted all twelve display transfers. It
 rejected both kind 1 cases. The model supplies the radio fragments directly;
 the context used by the physical receiver remains unknown. The owner confirmed
-that the same frame appeared on the same OL9 installation over USB. The next
-radio comparison changes the feature-call length from 134 to 56 bytes while
-preserving the carrier bytes.
+that the same frame appeared on the same OL9 installation over USB. After
+unplugging the cable, the screen returned to 1600. The radio comparison sent
+the identical twelve carrier payloads through 56-byte feature calls and the
+image reappeared. Input passed 9/9 and all six settings records again matched
+the wired backup. These checks qualify the 56-byte feature calls at the tested
+pacing on the development mouse and receiver.
 
 The last fully verified logical profile is 117 bytes with SHA256
 `7ffa0a87f04a79e52b4f4a519485f0ddbc0098ca5c9f94c0e8dcf8a2cea8d643`:

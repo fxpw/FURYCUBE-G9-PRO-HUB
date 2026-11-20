@@ -39,7 +39,8 @@ internal static class OledProtocolTests {
         var caps3 = OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'3',false));
         Check(caps3.Extension == "OL3" && caps3.SupportsRuntimeStatus, "OL3 advertises runtime status with the same geometry");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'4',false)).SupportsShortWrites, "OL4 advertises single-packet writes");
-        Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'5',false)).SupportsRadioWrites, "OL5 advertises the separate radio implementation");
+        Check(!OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'5',false)).SupportsRadioWrites, "OL5 is not qualified for receiver OLED");
+        Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'9',false)).SupportsRadioWrites, "OL9 is qualified for receiver OLED");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'6',false)).SupportsShortWrites, "OL6 retains guarded USB short writes");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'7',false)).SupportsShortWrites, "OL7 configuration-input guard retains USB OLED support");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'8',false)).SupportsShortWrites, "OL8 candidate retains guarded USB transport");

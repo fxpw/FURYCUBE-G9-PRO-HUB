@@ -51,7 +51,7 @@ internal static class OledStreaming {
             byte[] frame = DecodeFrame(line);
             // Build/validate all four pages before the first native transfer.
             // Sender keeps this same transport, caches discovery, and initializes
-            // only the first frame. Its default pacing is 25ms between pages.
+            // only the first frame. Pacing follows the verified transport.
             sender.WriteFrame(frame);
             frameIndex = checked(frameIndex + 1);
             // This is a host submission ACK. It is not firmware acknowledgement

@@ -15,12 +15,8 @@ using Furycube.G9.Settings;
 // Pure packet checks are shared by the executable and offline fixture tests.
 internal static class G9Wire {
     internal const int KeymapLength = 59;
-    // OL5's mouse-side RF handler alone does not qualify the USB receiver.
-    // Physical FA60 image submission stalled subsequent configuration reads.
-    // Keep normal radio settings/version reads available, but fail OLED before
-    // even discovery until an end-to-end receiver path has been qualified.
     internal static void RequireQualifiedOledTransport(ushort product) {
-        Require(product == 0x2148, "OLED through the 2.4 GHz receiver is not qualified after a physical relay failure; connect the mouse by USB. No OLED query or frame was sent.");
+        Require(product == 0x2148 || product == 0xFA60, "OLED requires a normal USB mouse or 2.4 GHz receiver interface.");
     }
     internal static byte[] ReadKeysRequest() { return ReadKeysRequest(1); }
     internal static byte[] ReadKeysRequest(int profile) { return ReadSettingsRequest(8, profile); }
@@ -59,17 +55,14 @@ internal static class G9Wire {
         Buffer.BlockCopy(logicalPacket, 0, envelope, 0, logicalPacket.Length);
         return envelope;
     }
-    // Windows HID feature buffer size is distinct from GO4's logical length.
-    // The receiver exposes 134-byte features. Preserve the validated 64-byte
-    // prefix and zero-pad its USB envelope; never enlarge the wired EP0 write.
+    // Discovery must already have verified OL9 for the receiver. The qualified
+    // radio path uses a SET04 carrier and submits its exact 56-byte length.
     internal static byte[] OledSetBuffer(ushort product, int featureBytes, byte[] report) {
+        RequireQualifiedOledTransport(product);
+        if(product == 0xFA60) return RadioOledFeatureBuffer("OL9", featureBytes, report, true);
         OledShortProtocol.ValidateWriteChunk(report);
-        Require(product == 0x2148 || product == 0xFA60, "Unsupported OLED product");
         Require(featureBytes >= 64, "OLED feature capacity is too small");
-        if(product == 0x2148) return (byte[])report.Clone();
-        Require(featureBytes == 134, "Unqualified receiver OLED feature capacity");
-        byte[] envelope = new byte[featureBytes]; Buffer.BlockCopy(report,0,envelope,0,report.Length);
-        return envelope;
+        return (byte[])report.Clone();
     }
     // Separate experimental SET04 carrier. Never admit this packet through
     // ValidateSend/SendSettings, and never enable it for stock/OL5.
@@ -405,7 +398,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             oledAuthorized = oledRuntimeStatusAuthorized = false; throw new OledFirmwareUnsupportedException("The opened device identity changed; OLED operations are disabled.");
         }
         if (Device.Product == 0xFA60 && !discovery && !oledRadioAuthorized)
-            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL5 discovery on this same handle.");
+            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL9 discovery on this same handle.");
     }
     public byte[] ReadOledFirmware() {
         lock (oledGate) {
@@ -415,6 +408,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             try {
                 var capabilities = OledProtocol.DecodeFirmwareCapabilities(reply);
                 OledProtocol.ValidateDeviceFirmware(capabilities, VendorId, ProductId);
+                if(Device.Product == 0xFA60) RequireRadioOledProfile();
                 oledRuntimeStatusAuthorized = capabilities.SupportsRuntimeStatus;
                 oledShortReportsAuthorized = capabilities.SupportsShortWrites;
                 oledRadioAuthorized = capabilities.SupportsRadioWrites;
@@ -424,14 +418,19 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             oledAuthorized = true; return reply;
         }
     }
+    void RequireRadioOledProfile() {
+        if(ReadProfile()[0] != 1)
+            throw new OledFirmwareUnsupportedException("OLED over the receiver requires active profile 1. No profile is selected automatically.");
+    }
     public void SendOledFeature(byte[] report) {
         lock (oledGate) {
             if (!oledAuthorized) throw new InvalidOperationException("This device handle has not advertised supported OLED firmware");
             EnsureOledIdentity();
-            if (!oledShortReportsAuthorized) throw new OledFirmwareUnsupportedException("OL4 is required for single-packet OLED writes; OL2/OL3 image uploads are disabled.");
-            OledShortProtocol.ValidateWriteChunk(report);
+            if (!oledShortReportsAuthorized) throw new OledFirmwareUnsupportedException("OL4 or later is required for USB OLED writes.");
             byte[] envelope = G9Wire.OledSetBuffer(Device.Product, Device.FeatureBytes, report);
+            if (Device.Product == 0xFA60 && report[7] == 0 && report[8] == 0) RequireRadioOledProfile();
             if (!G9Hid.HidD_SetFeature(handle, envelope, envelope.Length)) {
+                if(Device.Product == 0xFA60) receiverSessionFailed = true;
                 oledAuthorized = oledRuntimeStatusAuthorized = false; throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED SetFeature failed; remaining pages were not sent");
             }
             Console.WriteLine("OLED_SEND len={0} usbLen={4} page={1} x={2} flags={3}", report.Length, report[7], report[8], report[10], envelope.Length);
@@ -443,6 +442,14 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
                 throw new OledFirmwareUnsupportedException("OL3/OL4 discovery on this same open handle is required; stock/OL2 never receive GET 0x22.");
             EnsureOledIdentity();
             try {
+                if(Device.Product == 0xFA60) {
+                    // Direct report 22 remains unqualified on the receiver.
+                    // Use the same checksum-verified sensor read as radio settings.
+                    RequireRadioOledProfile();
+                    var sensor = MouseSettingsCodec.DecodeSensorProfile(1, Read(G9Wire.ReadSettingsRequest(4, 1), 4, G9Wire.SettingsReadLength(4)));
+                    byte stage = sensor.SelectedStage.Value;
+                    return OledRuntimeStatusCodec.EncodeConfiguredDpi(1, stage, sensor.DpiValues[stage - 1]);
+                }
                 G9Wire.ValidateAck(Get(0xA0, 8), false); Thread.Sleep(100);
                 EnsureOledIdentity();
                 // This dedicated query is not admitted by the generic configuration

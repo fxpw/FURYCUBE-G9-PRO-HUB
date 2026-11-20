@@ -44,8 +44,11 @@ const supportsUpload = computed(
   () =>
     isDesktop &&
     state.value.device.connected &&
-    /OL[4-9](?:\D|$)/.test(state.value.device.firmware) &&
-    state.value.device.connection === "usb",
+    ((state.value.device.connection === "usb" &&
+      /OL[4-9](?:\D|$)/.test(state.value.device.firmware)) ||
+      (state.value.device.connection === "radio" &&
+        /OL9(?:\D|$)/.test(state.value.device.firmware) &&
+        state.value.device.profile === 1)),
 );
 function hydrate(screen: ScreenState) {
   hydrating = true;
@@ -385,7 +388,7 @@ onBeforeUnmount(() => {
     <p>
       {{
         t(
-          "Загрузка OLED сейчас доступна по USB с OL4 или OL5. Передача через приёмник временно отключена. Текущая:",
+          "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9 и активный профиль 1. Текущая прошивка:",
         )
       }}
       {{ firmwareName(state.device.firmware) || t("не определена")
