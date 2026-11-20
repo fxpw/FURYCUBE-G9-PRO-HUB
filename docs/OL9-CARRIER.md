@@ -1,4 +1,4 @@
-# OL9 checksum-compatible SET04 carrier (offline)
+# OL9 checksum-compatible SET04 carrier
 
 OL9 is a separate mouse-side experiment derived from immutable OL7. It preserves the ordinary SET04 sensor checksum location and calculation while carrying forty OLED bytes in the same 56-byte RF report. It does not establish that the receiver will relay this envelope, and must never be sent to an unmodified mouse. The checksum shape matches `MouseSettingsCodec.BuildSetPacket` in `src/G9MouseSettings.cs`; this envelope is deliberately not valid native sensor settings (stage0 and custom tail).
 
@@ -55,9 +55,8 @@ stubbed: no resource overread, unchanged erase interval `[0x2B000,0x51000)`.
 The disabled updater SHA256 is
 `1f7a34bf8ce51cbc9c0be9072b0b49e5e78849260965734539e3b03cb972980c`.
 
-No updater was launched and OL9 is not installed. No HID, PnP, USB or radio
-operation was performed for OL9. The prior receiver-only GET0C baseline timed
-out before any image; PnP restart required reboot (3010), so physical traffic
-stopped. Receiver relay, timing, panel output, actual SRAM retention, install
-acceptance and recovery remain unqualified. Future physical qualification uses
-the separately reviewed USB procedure; see [the candidate matrix](RF-CANDIDATE-MATRIX.md).
+OL9 was installed over USB on 2026-11-20. The radio frame submission left the
+physical display at 1600, with input and saved settings verified afterward.
+The [candidate matrix](RF-CANDIDATE-MATRIX.md) records the physical test and the
+replay of its exact reports. Actual receiver delivery and firmware recovery
+still need verification.

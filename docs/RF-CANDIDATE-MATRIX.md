@@ -3,14 +3,14 @@
 Updated 2026-11-20. These are separate, pinned development candidates for the
 identified G9 PRO. OL9 has been installed over USB. The complete wired profile
 matched the backup after restoring the screen button, and wired input passed
-9/9. The radio frame test follows this check. OL7 is the last build with a
+9/9. The radio frame test left the display at 1600 DPI. OL7 is the last build with a
 visually confirmed USB image. OL8 has passed offline checks.
 
 | Variant | Purpose | Carrier | Status |
 | --- | --- | --- | --- |
 | OL7 | Baseline with USB settings/input readiness guard |56-byte SET04, kind0, stage0, custom CRC/tag6 | Earlier installed; USB image/input confirmed. After physical reconnect GET0C worked, but sensor GET04 and later version probes timed out. Passive radio input passed 9/9; no radio image submitted. |
 | OL8 | Test whether the receiver supplies context kind1 | Same carrier; allow kind0/1 and reject2/255 | Full offline checks and bounded updater ready; not installed. |
-| OL9 | Test a receiver that verifies the native sensor checksum |56-byte SET04 with OEM checksum50..51 plus custom CRC52..53/tag9 | Installed over USB. Firmware marker, profile and wired input verified. Radio frame pending. |
+| OL9 | Test whether a receiver relays an envelope with the native sensor checksum |56-byte SET04 with OEM checksum50..51 plus custom CRC52..53/tag9 | Installed over USB. The receiver accepted 12 USB submissions, the display stayed at 1600, radio input passed 9/9, and the six readable settings records matched the USB backup. |
 
 OL8 changes exactly three compiled bytes relative to OL7: the version marker,
 kind comparison and rejection branch. OL9 is described in [its packet
@@ -47,16 +47,21 @@ Each complete decoded candidate passes 800 wired IRQ cases, 53 endpoint cases,
 assembly/rendering and the native pixel/sleep/retained-reset suite. Physical
 receiver delivery, timing and actual SRAM retention remain outside these models.
 
-## Next physical session
+## Physical frame test
 
-1. Switch the OL9 mouse to 2.4 GHz. The updated native settings transport
-   already read and verified all six archived radio records on DG4.
-2. Submit one control frame with the guarded `ol6-radio-frame` CLI. It checks
-   the firmware marker and active profile before choosing the OL9 packet.
-   The USB feature buffer is padded to 134 bytes and the logical packet remains
-   56 bytes. Stop on a failed request and collect the result before continuing.
-3. Check the physical picture and ordinary input, then compare the readable
-   settings against the USB snapshot. OLED remains experimental on radio.
+The guarded `ol6-radio-frame` CLI read the OL9 marker and profile 1 over 2.4 GHz.
+The first invocation stopped at a double decode of the profile reply before
+sending any fragments. After the fix, Windows accepted all twelve 134-byte
+feature submissions containing the 56-byte OL9 report. The owner observed 1600
+on the screen. Passive radio input passed 9/9 and all six settings records
+read after the frame matched the wired backup.
+
+The exact twelve captured reports replayed successfully against the sealed OL9
+mouse firmware with context kind 0, for both tested selector values. The model
+assembled the exact host frame and emitted all twelve display transfers. It
+rejected both kind 1 cases. The model supplies the radio fragments directly;
+the context used by the physical receiver remains unknown. A same-image USB
+control on OL9 can narrow the next investigation to the radio delivery path.
 
 The last fully verified logical profile is 117 bytes with SHA256
 `7ffa0a87f04a79e52b4f4a519485f0ddbc0098ca5c9f94c0e8dcf8a2cea8d643`:
