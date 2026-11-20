@@ -363,7 +363,8 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             // Reject old firmware before any further query or reserved packet.
             string extension=OledProtocol.DecodeFirmwareCapabilities(firmware).Extension;
             if(extension!="OL6" && extension!="OL7" && extension!="OL8" && extension!="OL9")throw new InvalidDataException("OL6..OL9 firmware is required; no reserved carrier sent");
-            G9Wire.ValidateOl6RadioIdentity(Device.Product,Device.FeatureBytes,firmware,ReadProfile());
+            byte[] profileReport=Read(G9Wire.ReadProfileRequest(),0x0C,8);
+            G9Wire.ValidateOl6RadioIdentity(Device.Product,Device.FeatureBytes,firmware,profileReport);
             for(int index=0;index<12;index++) {
                 EnsureSettingsIdentity();
                 byte[] pixels=new byte[40];Buffer.BlockCopy(frame,index*40,pixels,0,40);

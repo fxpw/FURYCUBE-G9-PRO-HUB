@@ -127,6 +127,10 @@ internal static class DeviceProtocolTests {
         G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c37"),profileOne);count++;
         G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c38"),profileOne);count++;
         G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c39"),profileOne);count++;
+        byte[] liveOl9Profile=new byte[64];
+        Buffer.BlockCopy(Hex("0c080101fe05fa00"),0,liveOl9Profile,0,8);
+        liveOl9Profile[8]=0x04;
+        G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c39"),G9Wire.ConfigurationReply(0xFA60,0x0C,8,liveOl9Profile));count++;
         byte[] carrier9=G9Wire.Ol9RadioCarrier(Furycube.G9.Oled.OledShortProtocol.BuildWriteChunk(0,0,pixels40,true));
         Pass(G9Wire.Equal(carrier9,Hex("04380100013f00000128000102030405060708090a0b0c0d000e0f101112131415161718191a1b1c1d1e1f20212223242526034ee98d2709")),"OL9 packet matches independent Python/ARM vector with OEM sum and isolated final pixel");
         int sensorSum=0;for(int i=3;i<50;i++)sensorSum+=carrier9[i];
