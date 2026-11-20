@@ -496,6 +496,15 @@ export function oledStatus(value: string): string {
   if (locale.value !== "en") return value;
   const phrases: [string, string][] = [
     [
+      "OLED поддерживает USB с OL4 и новее и 2.4G с OL9 на профиле 1. Живые данные обновляются, пока HUB открыт.",
+      "OLED supports USB with OL4 or later and 2.4G with OL9 on profile 1. Live data updates while the HUB runs.",
+    ],
+    [
+      "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9 и активный профиль 1.",
+      "Check OLED compatibility. USB requires OL4 or later. 2.4G requires OL9 and active profile 1.",
+    ],
+    ["Передача остановлена:", "Upload stopped:"],
+    [
       "Восстановлен последний переданный кадр.",
       "Last submitted frame restored.",
     ],

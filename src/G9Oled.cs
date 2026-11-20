@@ -207,8 +207,8 @@ namespace Furycube.G9.Oled {
                 try {
                     foreach (byte[] report in reports) {
                         ValidateIdentity(); transport.SendFeature(report); sent++;
-                        // The receiver needs the verified gap after the last
-                        // fragment too, before the next frame or settings read.
+                        // Keep the tested receiver gap after the last fragment
+                        // before the next frame or settings read.
                         if (radio || sent < reports.Length) wait(radio ? 500 : 25);
                     }
                 }
