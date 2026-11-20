@@ -1,6 +1,10 @@
 # Receiver configuration reads
 
-Updated 2026-11-16. This concerns normal settings traffic, not firmware installation.
+Updated 2026-11-20. The Windows helper now opens the FA60 configuration
+interface for asynchronous I/O. It sends a 134-byte feature buffer and reads
+with an explicit input and output buffer. A full settings read on DG4 passed
+with six records matching the wired backup. The [transport comparison](OEM-FIRST-RADIO-READ.md)
+records the controlled trials.
 
 ## The short-response failure
 

@@ -13,6 +13,31 @@ internal static class DeviceProtocolTests {
         byte[] original = Hex("083b0102000003000004000012000d0d00003c00000500000600000100000100000100000100000100000100000100000100000a00000900000097");
         Pass(G9Wire.Equal(G9Wire.DecodeKeys(zero), zero), "captured zero keymap");
         Pass(G9Wire.Equal(G9Wire.WithZero(original), zero), "original macro assignment becomes captured single zero");
+        byte[] pollingPrepare=Hex("a006090001000000"),pollingSet=Hex("06090144bb00000000");
+        foreach(byte[] packet in new[]{pollingPrepare,pollingSet,zero,G9Wire.BuildProfileSet(1,1)}) {
+            byte[] before=(byte[])packet.Clone();
+            byte[] radioSend=G9Wire.ConfigurationSendBuffer(0xFA60,134,packet);
+            byte[] usbSend=G9Wire.ConfigurationSendBuffer(0x2148,262,packet);
+            bool prefix=true,zeroTail=true;
+            for(int i=0;i<packet.Length;i++)if(radioSend[i]!=packet[i])prefix=false;
+            for(int i=packet.Length;i<radioSend.Length;i++)if(radioSend[i]!=0)zeroTail=false;
+            Pass(radioSend.Length==134&&prefix&&zeroTail,"OEM134 envelope preserves validated read/SET bytes and zeroes every tail byte");
+            Pass(G9Wire.Equal(usbSend,packet)&&usbSend.Length==packet.Length,"wired configuration keeps original EP0 packet length");
+            radioSend[0]^=1;usbSend[0]^=1;
+            Pass(G9Wire.Equal(packet,before),"configuration transport buffers do not alias caller packets");
+        }
+        byte[] preparedEnvelope=G9Wire.ConfigurationSendBuffer(0xFA60,134,pollingPrepare);
+        Pass(G9Wire.Hex(preparedEnvelope).Substring(0,16)=="a006090001000000"&&preparedEnvelope[2]==9,"OEM polling prepare preserves logical reply length9 inside USB134");
+        foreach(int capacity in new[]{-1,0,8,64,120,132,133,135,262})
+            Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,capacity,pollingPrepare);},"unqualified receiver send capacity "+capacity);
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0x2148,58,zero);},"wired send cannot exceed feature capacity");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0x0033,134,pollingPrepare);},"configuration envelope excludes bootloader");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,null);},"missing logical send packet");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,preparedEnvelope);},"already padded packet cannot bypass logical validation");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,Hex("1008000000000000"));},"padding cannot admit firmware-update entry");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,Hex("a010080001000000"));},"padding cannot admit update-entry GET prepare");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,Change(pollingSet,4,0));},"padding cannot hide a bad polling complement");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,Change(zero,58,0));},"padding cannot hide a bad captured key checksum");
         byte[] padded = new byte[64]; Buffer.BlockCopy(zero, 0, padded, 0, zero.Length);
         Pass(G9Wire.Equal(G9Wire.DecodeKeys(padded), zero), "receiver 64-byte transfer");
         Reject(delegate { G9Wire.DecodeKeys(new byte[58]); }, "truncated keymap");
@@ -76,6 +101,7 @@ internal static class DeviceProtocolTests {
         Reject(delegate { G9Wire.ValidateSend(Change(zero, 58, 0)); }, "bad keymap write");
         Reject(delegate { G9Wire.ValidateSend(Hex("a0096f000d000000")); }, "macro query outside permitted operations");
         byte[] oledChunk=Furycube.G9.Oled.OledShortProtocol.BuildWriteChunk(0,0,new byte[40],true);
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,oledChunk);},"configuration padding does not admit OLED image commands");
         G9Wire.RequireQualifiedOledTransport(0x2148);count++;
         Reject(delegate{G9Wire.RequireQualifiedOledTransport(0xFA60);},"physical receiver relay failure blocks native OLED before discovery");
         Reject(delegate{G9Wire.RequireQualifiedOledTransport(0x0033);},"unqualified OLED bootloader blocked");
@@ -95,6 +121,7 @@ internal static class DeviceProtocolTests {
         Pass(G9Wire.Equal(carrier,Hex("04380100013fa55a00000128000102030405060708090a0b000c0d0e0f101112131415161718191a1b1c1d1e1f20212223242526273e8b06")),"OL6 carrier matches independent Python/ARM vector including displaced pixel and CRC");
         Pass(carrier.Length==56&&carrier[24]==0&&carrier[55]==6,"carrier has invalid native DPI stage and exact SET04 length");
         Reject(delegate{G9Wire.ValidateSend(carrier);},"reserved carrier never admitted by settings send allowlist");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,carrier);},"configuration padding does not admit reserved OL6 carrier");
         byte[] ol6=Hex("0b080101084f4c36"),profileOne=Hex("0c080101fe01fe00");
         G9Wire.ValidateOl6RadioIdentity(0xFA60,134,ol6,profileOne);count++;
         G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c37"),profileOne);count++;
@@ -105,6 +132,7 @@ internal static class DeviceProtocolTests {
         int sensorSum=0;for(int i=3;i<50;i++)sensorSum+=carrier9[i];
         Pass(sensorSum==((carrier9[50]<<8)|carrier9[51]),"OL9 preserves the original sensor checksum envelope");
         Reject(delegate{G9Wire.ValidateSend(carrier9);},"checksum-compatible carrier still cannot pass settings allowlist");
+        Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,carrier9);},"configuration padding does not admit reserved OL9 carrier");
         Reject(delegate{G9Wire.Ol9RadioCarrier(Change(oledChunk,62,0));},"OL9 refuses malformed source GO4");
         Reject(delegate{G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c35"),profileOne);},"OL5 cannot receive reserved carrier");
         Reject(delegate{G9Wire.ValidateOl6RadioIdentity(0x2148,262,ol6,profileOne);},"carrier cannot use USB mouse path");

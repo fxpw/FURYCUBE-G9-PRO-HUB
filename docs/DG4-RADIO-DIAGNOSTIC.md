@@ -97,8 +97,10 @@ the offline transfer proof do not establish installed flash integrity or a
 working recovery path. Configuration readback and physical input/display checks
 are separate evidence; they do not replace a complete flash dump either.
 
-Next: isolate explicit input/output GET buffers while retaining SET134 and the
-existing handle mode and requested read lengths.
+The explicit input/output GET control also timed out on a fresh connection:
+A0 returned eight bytes successfully but remained not ready. No payload was
+requested. Next: isolate read/write access on the transaction handle while
+retaining synchronous mode, SET134 and the same in/out read buffers.
 Production transport has not changed. Before any diagnostic whose
 interpretation depends on request identity, record a different visible baseline
 and observe the result before another configuration operation replaces context.

@@ -95,10 +95,24 @@ Actual instruction execution from the installed x64 and x86 `hid.dll` exposed
 another API difference: `HidD_GetFeature` calls IOCTL `0xB0192` with a null,
 zero-length input and the report as output. The original HIDAPI calls that IOCTL
 with the same report buffer and length as both input and output. A private
-control is prepared to match that in/out form while retaining the existing
-zero-access, non-overlapped handle, SET134, A0 GET8 and granted GET64. It has
-not run yet; this is an observed API difference, not an established cause.
-Complete radio settings and OLED transport remain unqualified.
+control matched that in/out form while retaining the existing zero-access,
+non-overlapped handle, SET134, A0 GET8 and granted GET64. After a fresh reset
+and 1000 baseline, each A0 IOCTL succeeded and returned exactly eight bytes,
+but every reply was not ready. The control timed out without requesting GET06.
+This in/out change alone therefore did not complete the transaction.
+
+A separate control is prepared to change only the transaction handle to
+read/write access, retaining synchronous mode and the same in/out buffers and
+lengths. It has not run yet.
+The synchronous read/write control also timed out. Opening the same transaction
+handle with `FILE_FLAG_OVERLAPPED` succeeded with the same padded prepare,
+explicit input/output buffer and GET64. A0 became ready and the first nine reply
+bytes matched the USB polling record. The owner saw 1096 and confirmed input.
+
+The managed transport now uses that combination for FA60. On 2026-11-20,
+`settings-read` completed through the receiver, with its profile, sensor,
+polling, RF and button records matching the saved USB records. The wired path
+still uses its existing synchronous calls. Radio OLED needs a visible frame test.
 
 The Vue host now skips its separate automatic firmware-version query when the
 selected device is on radio. That query previously ran after a successful

@@ -47,6 +47,18 @@ internal static class G9Wire {
         byte[] result = new byte[logicalLength]; Buffer.BlockCopy(response, 0, result, 0, result.Length);
         return result;
     }
+    internal static byte[] ConfigurationSendBuffer(ushort product, int featureBytes, byte[] logicalPacket) {
+        ValidateSend(logicalPacket);
+        Require(product == 0x2148 || product == 0xFA60, "Unsupported configuration product");
+        Require(featureBytes >= logicalPacket.Length, "Configuration packet exceeds the device feature capacity");
+        if(product == 0x2148) return (byte[])logicalPacket.Clone();
+        Require(featureBytes == 134, "Unqualified receiver configuration feature capacity");
+        // Match the OEM sender's USB envelope without changing logical lengths,
+        // checksums or the configuration command allowlist.
+        byte[] envelope = new byte[featureBytes];
+        Buffer.BlockCopy(logicalPacket, 0, envelope, 0, logicalPacket.Length);
+        return envelope;
+    }
     // Windows HID feature buffer size is distinct from GO4's logical length.
     // The receiver exposes 134-byte features. Preserve the validated 64-byte
     // prefix and zero-pad its USB envelope; never enlarge the wired EP0 write.
@@ -196,9 +208,11 @@ internal static class G9Hid {
     [DllImport("setupapi.dll")] internal static extern bool SetupDiDestroyDeviceInfoList(IntPtr devices);
     [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
     internal static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
-    internal static SafeFileHandle Open(string path) {
-        // Feature IOCTLs permit a metadata/zero-access handle; keyboard streams are never opened or read.
-        SafeFileHandle result = CreateFile(path, 0, 3, IntPtr.Zero, 3, 0, IntPtr.Zero);
+    internal static SafeFileHandle Open(string path, bool receiverTransaction = false) {
+        // Enumeration and wired features retain metadata access. The receiver
+        // needs the OEM-compatible RW/OVERLAPPED configuration handle.
+        SafeFileHandle result = CreateFile(path, receiverTransaction ? 0xC0000000u : 0u, 3, IntPtr.Zero, 3,
+            receiverTransaction ? 0x40000000u : 0u, IntPtr.Zero);
         if (result.IsInvalid) { int error = Marshal.GetLastWin32Error(); result.Dispose(); throw new Win32Exception(error, "Cannot open the G9 configuration interface"); }
         return result;
     }
@@ -247,6 +261,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
     readonly SafeFileHandle handle;
     readonly object oledGate = new object();
     bool oledAuthorized, oledRuntimeStatusAuthorized, oledShortReportsAuthorized, oledRadioAuthorized;
+    bool receiverSessionFailed;
     internal readonly G9Hid.Candidate Device;
     public ushort VendorId { get { return 0x1D57; } }
     public ushort ProductId { get { return Device.Product; } }
@@ -257,34 +272,49 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
         if (matches.Count != 1) throw new InvalidOperationException(matches.Count == 0 ? "G9 configuration interface is not connected" : "Multiple matching G9 devices; refusing an ambiguous transaction");
         Device = matches[0];
         if(expectedPath!=null&&!String.Equals(expectedPath,Device.Path,StringComparison.OrdinalIgnoreCase))throw new InvalidOperationException("The selected mouse changed; reread the device before any operation.");
-        handle = G9Hid.Open(Device.Path);
+        if(Device.Product==0xFA60 && Device.FeatureBytes!=134)throw new InvalidDataException("Unqualified receiver feature capacity; no transaction opened");
+        handle = G9Hid.Open(Device.Path,Device.Product==0xFA60);
         Console.WriteLine("TARGET VID=1d57 PID={0:x4} featureBytes={1} path={2}", Device.Product, Device.FeatureBytes, Device.Path);
     }
     byte[] Get(byte report, int length) {
+        if(receiverSessionFailed)throw new InvalidOperationException("Receiver session failed; close it and reread the device before another operation");
         if (length > Device.FeatureBytes) throw new InvalidDataException("Feature request exceeds the device report buffer");
-        byte[] data = new byte[length]; data[0] = report;
-        if (!G9Hid.HidD_GetFeature(handle, data, data.Length))
-            throw new Win32Exception(Marshal.GetLastWin32Error(), "GetFeature " + report.ToString("x2") + " failed; stop and reconnect before another transaction");
+        byte[] data;
+        if(Device.Product==0xFA60) {
+            try { data=G9ReceiverFeatureGet.Read(handle,report,length); }
+            catch { receiverSessionFailed=true;throw; }
+        } else {
+            data = new byte[length]; data[0] = report;
+            if (!G9Hid.HidD_GetFeature(handle, data, data.Length))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetFeature " + report.ToString("x2") + " failed; stop and reconnect before another transaction");
+        }
         Console.WriteLine("GET id={0:x2} len={1} data={2}", report, data.Length, G9Wire.Hex(data)); return data;
     }
     void Send(byte[] packet) {
-        G9Wire.ValidateSend(packet);
-        if (packet.Length > Device.FeatureBytes) throw new InvalidDataException("Feature packet exceeds the device report buffer");
-        if (!G9Hid.HidD_SetFeature(handle, packet, packet.Length))
+        if(receiverSessionFailed)throw new InvalidOperationException("Receiver session failed; close it and reread the device before another operation");
+        byte[] envelope=G9Wire.ConfigurationSendBuffer(Device.Product,Device.FeatureBytes,packet);
+        if (!G9Hid.HidD_SetFeature(handle, envelope, envelope.Length)) {
+            if(Device.Product==0xFA60)receiverSessionFailed=true;
             throw new Win32Exception(Marshal.GetLastWin32Error(), "SetFeature failed; no further commands sent");
-        Console.WriteLine("SEND len={0} data={1}", packet.Length, G9Wire.Hex(packet));
+        }
+        Console.WriteLine("SEND len={0} logicalBytes={1} data={2}", envelope.Length,packet.Length,G9Wire.Hex(envelope));
     }
     byte[] Read(byte[] request, byte report, int length) {
-        int transferLength = G9Wire.ConfigurationReadLength(Device.Product, report, length);
-        if (transferLength > Device.FeatureBytes) throw new InvalidDataException("Configuration read exceeds the device report buffer; no query was sent");
-        Furycube.G9.Protocol.G9ReadHandshake.ValidateIdle(Get(0xA0, 8)); Thread.Sleep(100);
-        Send(request);
-        var deadline=System.Diagnostics.Stopwatch.StartNew();
-        Furycube.G9.Protocol.G9ReadHandshake.WaitForReady(delegate {return Get(0xA0,8);},Thread.Sleep,delegate {return deadline.ElapsedMilliseconds;},2000,100,500);
-        Thread.Sleep(100);
-        // A granted read is consumed exactly once, including on validation failure.
-        byte[] response = Get(report, transferLength); Thread.Sleep(150);
-        return G9Wire.ConfigurationReply(Device.Product, report, length, response);
+        try {
+            int transferLength = G9Wire.ConfigurationReadLength(Device.Product, report, length);
+            if (transferLength > Device.FeatureBytes) throw new InvalidDataException("Configuration read exceeds the device report buffer; no query was sent");
+            Furycube.G9.Protocol.G9ReadHandshake.ValidateIdle(Get(0xA0, 8)); Thread.Sleep(100);
+            Send(request);
+            var deadline=System.Diagnostics.Stopwatch.StartNew();
+            Furycube.G9.Protocol.G9ReadHandshake.WaitForReady(delegate {return Get(0xA0,8);},Thread.Sleep,delegate {return deadline.ElapsedMilliseconds;},2000,100,500);
+            Thread.Sleep(100);
+            // A granted read is consumed exactly once, including on validation failure.
+            byte[] response = Get(report, transferLength); Thread.Sleep(150);
+            return G9Wire.ConfigurationReply(Device.Product, report, length, response);
+        } catch {
+            if(Device.Product==0xFA60)receiverSessionFailed=true;
+            throw;
+        }
     }
     internal byte[] ReadKeys() { return ReadKeys(1); }
     internal byte[] ReadKeys(int profile) { return G9Wire.DecodeKeys(Read(G9Wire.ReadKeysRequest(profile), 8, 59),profile); }
@@ -293,6 +323,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
     ushort IG9SettingsSession.SettingsProductId { get { return Device.Product; } }
     string IG9SettingsSession.SettingsDevicePath { get { return Device.Path; } }
     void EnsureSettingsIdentity() {
+        if(receiverSessionFailed)throw new InvalidOperationException("Receiver session failed; close it and reread the device before another operation");
         if((Device.Product!=0x2148 && Device.Product!=0xFA60) || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes<(Device.Product==0x2148?120:64))
             throw new InvalidOperationException("Settings require the same open G9 configuration interface.");
         var attributes=new G9Hid.Attributes {Size=(uint)Marshal.SizeOf(typeof(G9Hid.Attributes))};
@@ -338,16 +369,22 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
                 byte[] pixels=new byte[40];Buffer.BlockCopy(frame,index*40,pixels,0,40);
                 byte[] chunk=OledShortProtocol.BuildWriteChunk(index/3,(index%3)*40,pixels,index==0);
                 byte[] packet=extension=="OL9"?G9Wire.Ol9RadioCarrier(chunk):G9Wire.Ol6RadioCarrier(chunk);
-                // Same exact56-byte USB report length as the successful sensor
-                // SET04 experiment. Report22 padding is intentionally not used.
-                if(!G9Hid.HidD_SetFeature(handle,packet,packet.Length))throw new Win32Exception(Marshal.GetLastWin32Error(),"OL6 carrier failed; no remaining chunks sent");
-                Console.WriteLine("OL6_RADIO_SEND index={0} firmware={2} len=56 data={1}",index,G9Wire.Hex(packet),extension);
+                // The firmware receives the logical SET04 length in byte 1.
+                // Use the OEM receiver's full feature buffer for USB transport.
+                var envelope=new byte[Device.FeatureBytes];
+                Buffer.BlockCopy(packet,0,envelope,0,packet.Length);
+                if(!G9Hid.HidD_SetFeature(handle,envelope,envelope.Length)) {
+                    receiverSessionFailed=true;
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),"Radio OLED carrier failed; no remaining chunks sent");
+                }
+                Console.WriteLine("OL6_RADIO_SEND index={0} firmware={2} len=56 data={1} usbLen={3}",index,G9Wire.Hex(packet),extension,envelope.Length);
                 Thread.Sleep(500);
             }
             Console.WriteLine("OL6_RADIO_EXPERIMENT_SENT=12 DISPLAY_VERIFIED=false; no automatic follow-up query or retry");
         }
     }
     void EnsureOledIdentity(bool discovery = false) {
+        if(receiverSessionFailed)throw new InvalidOperationException("Receiver session failed; close it and reread the device before another operation");
         if ((Device.Product != 0x2148 && Device.Product != 0xFA60) || handle.IsInvalid || handle.IsClosed || Device.FeatureBytes < OledShortProtocol.FeatureBytes) {
             oledAuthorized = oledRuntimeStatusAuthorized = false;
             throw new OledFirmwareUnsupportedException("OLED operations require the same open normal G9 configuration interface.");

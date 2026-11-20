@@ -210,6 +210,7 @@ internal sealed partial class G9Hub : Form {
     readonly TextBox log = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 9) };
     readonly List<Button> actions = new List<Button>();
     readonly object deviceGate = new object();
+    readonly G9CommandProcessOwner commandOwner = new G9CommandProcessOwner();
     G9OledWorker oledWorker;
     readonly G9ScreenEditor screenEditor;
     readonly G9MouseSettingsEditor settingsEditor;
@@ -360,7 +361,7 @@ internal sealed partial class G9Hub : Form {
             DeviceScan scan=await Task.Run(delegate {
                 lock(deviceGate) {
                     if(closing || generation!=deviceGeneration)throw new OperationCanceledException("Подключение изменилось.");
-                    var value=new DeviceScan {Caps=knownCaps??RunDeviceProcess("caps")};
+                    var value=new DeviceScan {Caps=commandOwner.RecoveryRequired ? RunDeviceProcess("caps") : knownCaps??RunDeviceProcess("caps")};
                     try {value.Read=G9Startup.ReadDeviceFromCaps(RunDeviceProcess,value.Caps);}catch(Exception error){value.Error=error;}return value;
                 }
             });
@@ -377,6 +378,7 @@ internal sealed partial class G9Hub : Form {
             if(result.Wired || result.Output.IndexOf("SETTINGS_JSON ",StringComparison.Ordinal)>=0) {
                 var snapshot=G9SettingsSnapshot.Parse(result.Output,false);
                 var mapping=G9MappingSnapshot.FromKeymap(snapshot.profile,snapshot.Keys);
+                commandOwner.ConfirmFreshRead();
                 latestSettings=snapshot;latestMapping=mapping;
                 bool settingsAccepted=settingsEditor.AcceptStartupSnapshot(snapshot);
                 bool buttonsAccepted=buttonEditor.AcceptStartupSnapshot(mapping);accepted=settingsAccepted && buttonsAccepted;
@@ -432,6 +434,7 @@ internal sealed partial class G9Hub : Form {
         resumeReady=false;resumeAfterChange=false;await screenEditor.ResumeDisplay();
     }
     G9OledWorker CreateOledWorker(string identity) {
+        commandOwner.RequireReadyForOled();
         return new G9OledWorker(new ProcessStartInfo {FileName=Path.Combine(root,"bin","G9Device.exe"),WorkingDirectory=root,Arguments="oled-stream"+G9Startup.DeviceSuffix(identity)},Append,30000);
     }
     void AddButton(FlowLayoutPanel panel, string text, EventHandler click) {
@@ -462,6 +465,7 @@ internal sealed partial class G9Hub : Form {
         return Task.Run(delegate {
             lock(deviceGate) {
                 if(closing || generation!=deviceGeneration)throw new OperationCanceledException("Подключение OLED изменилось.");
+                commandOwner.RequireReadyForOled();
                 G9OledWorker current=oledWorker;
                 try {
                     if(current==null) {
@@ -487,6 +491,7 @@ internal sealed partial class G9Hub : Form {
         return Task.Run(delegate {
             lock(deviceGate) {
                 if(closing || generation!=deviceGeneration)throw new OperationCanceledException("Подключение OLED изменилось.");
+                commandOwner.RequireReadyForOled();
                 G9OledWorker current=oledWorker;
                 try {
                     if(current==null) {
@@ -508,6 +513,7 @@ internal sealed partial class G9Hub : Form {
     protected override void Dispose(bool disposing) {
         if(disposing && !closing) {
             closing=true;
+            commandOwner.Close();
             System.Threading.Interlocked.Increment(ref deviceGeneration);backgroundTimer.Stop();backgroundTimer.Dispose();
             tray.Visible=false;if(tray.ContextMenuStrip!=null)tray.ContextMenuStrip.Dispose();tray.Dispose();
             var current=System.Threading.Interlocked.Exchange(ref oledWorker,null);
@@ -520,17 +526,28 @@ internal sealed partial class G9Hub : Form {
         if (!File.Exists(executable)) throw new FileNotFoundException("Не найдена утилита G9Device.exe", executable);
         var start = new ProcessStartInfo { FileName = executable, Arguments = action, WorkingDirectory = root, UseShellExecute = false,
             CreateNoWindow = true, WindowStyle = ProcessWindowStyle.Hidden, RedirectStandardOutput = true, RedirectStandardError = true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8 };
-        using (var process = new Process { StartInfo = start }) {
+        var process = new Process { StartInfo = start };
+        G9CommandProcessOwner.Lease lease = null;
+        bool success = false;
+        try {
             var output = new StringBuilder(); var errors = new StringBuilder();
             process.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) { lock (output) output.AppendLine(e.Data); Append(e.Data); } };
             process.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e) { if (e.Data != null) { lock (errors) errors.AppendLine(e.Data); Append(e.Data); } };
-            process.Start(); process.BeginOutputReadLine(); process.BeginErrorReadLine();
+            lease = commandOwner.Start(action, new G9CommandProcess(process));
+            process.BeginOutputReadLine(); process.BeginErrorReadLine();
             int timeout=action.StartsWith("settings-",StringComparison.Ordinal)?45000:30000;
-            if (!process.WaitForExit(timeout)) { process.Kill(); throw new TimeoutException("Мышь не завершила операцию за " + (timeout/1000) + " секунд. Перед следующей записью перечитайте её состояние."); }
+            if (!process.WaitForExit(timeout)) {
+                if (!commandOwner.Stop(lease))
+                    throw new TimeoutException("Не удалось подтвердить завершение процесса устройства. Новые команды остановлены.");
+                throw new TimeoutException("Мышь не завершила операцию за " + (timeout/1000) + " секунд. Перечитайте её настройки.");
+            }
             process.WaitForExit();
             if (process.ExitCode == 4) throw new InvalidOperationException("Выбранная операция OLED не поддерживается прошивкой мыши. Для картинки нужны OL4 и USB-кабель; кадр не отправлен.");
             if (process.ExitCode != 0) throw new InvalidOperationException(errors.Length > 0 ? errors.ToString().Trim() : "G9Device завершил операцию с ошибкой; подробности в журнале.");
+            success = true;
             return output.ToString();
+        } finally {
+            commandOwner.Finish(lease,success);
         }
     }
     [STAThread] static int Main(string[] args) {
