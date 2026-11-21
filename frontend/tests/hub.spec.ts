@@ -524,11 +524,11 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OLC"]) {
       page.getByLabel("Обновлять в реальном времени"),
     ).toBeDisabled();
     await expect(
-      page.getByText(/Для 2\.4G нужна OL9, OLA или OLB и активный профиль 1/),
+      page.getByText(/Для 2\.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1/),
     ).toBeVisible();
     await page.locator(".language-control select").selectOption("en");
     await expect(
-      page.getByText(/2\.4G requires OL9, OLA or OLB and active profile 1/),
+      page.getByText(/2\.4G requires OL9, OLA, OLB, OLD or OLE and active profile 1/),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Upload to OLED", exact: true }),
@@ -537,7 +537,7 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OLC"]) {
   });
 }
 
-for (const revision of ["OL9", "OLA", "OLB"]) {
+for (const revision of ["OL9", "OLA", "OLB", "OLD", "OLE"]) {
   test(`${revision} radio allows OLED only on active profile 1`, async ({
     page,
   }) => {
@@ -565,7 +565,7 @@ for (const revision of ["OL9", "OLA", "OLB"]) {
   });
 }
 
-for (const revision of ["OL7", "OL8", "OL9", "OLA", "OLB"]) {
+for (const revision of ["OL7", "OL8", "OL9", "OLA", "OLB", "OLD", "OLE"]) {
   test(`${revision} USB permits a guarded control upload`, async ({
     page,
   }) => {

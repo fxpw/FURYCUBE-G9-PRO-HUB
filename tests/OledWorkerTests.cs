@@ -74,9 +74,13 @@ internal static class OledWorkerTests {
         using(var input=OledStreaming.OpenUtf8Input(Console.OpenStandardInput())){
         int index=0,status=0;for(;;){string line=input.ReadLine();if(line==null)return mode=="normal"?3:0;if(line=="STOP")return 0;
             if(line=="STATUS"){ChildStatus(mode,++status);continue;}
-            bool live=line.StartsWith(OledStreamCommand.Live,StringComparison.Ordinal);
-            string prefix=live?OledStreamCommand.Live:OledStreamCommand.Frame;
+            bool partial=line.StartsWith(OledStreamCommand.LiveDelta,StringComparison.Ordinal);
+            bool live=partial||line.StartsWith(OledStreamCommand.Live,StringComparison.Ordinal);
+            string prefix=partial?OledStreamCommand.LiveDelta:live?OledStreamCommand.Live:OledStreamCommand.Frame;
             if(!line.StartsWith(prefix,StringComparison.Ordinal)||Convert.FromBase64String(line.Substring(prefix.Length)).Length!=480)return 2;
+            if((mode=="partial-first-unchanged"&&partial&&index==0)||mode=="unsolicited-unchanged"){
+                Emit(OledStreamCommand.Unchanged+(++index));continue;
+            }
             if((mode=="defer-first"&&index==0&&live)||mode=="defer-manual"){
                 Emit(OledStreamCommand.Deferred+(++index));continue;
             }
@@ -233,6 +237,13 @@ internal static class OledWorkerTests {
             }
             using(var worker=Worker("defer-manual",3000,null)){
                 Reject(delegate{worker.Send(frame);},"deferred response is rejected for a manual frame");
+            }
+            using(var worker=Worker("partial-first-unchanged",3000,null)){
+                Check(worker.Send(frame,true,true)&&worker.FramesSubmitted==0,"identical partial request succeeds without claiming a send");
+                Check(worker.Send(frame,true,true)&&worker.FramesSubmitted==1,"a changed partial frame counts as one submission");
+            }
+            using(var worker=Worker("unsolicited-unchanged",3000,null)){
+                Reject(delegate{worker.Send(frame,true);},"unchanged acknowledgement requires a partial command");
             }
             using(var worker=Worker("delay",3000,null)){
                 Task a=Task.Run(delegate{worker.Send(frame);}),b=Task.Run(delegate{worker.Send(frame);});

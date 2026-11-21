@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -99,11 +100,19 @@ internal static class G9Wire {
     }
     internal static byte[] Ol9RadioCarrier(byte[] chunk) {
         OledShortProtocol.ValidateWriteChunk(chunk);
+        return BuildOl9Carrier(chunk[7], chunk[8], chunk[10], chunk, 12);
+    }
+    internal static byte[] RadioDeltaCarrier(int featureBytes, byte[] delta) {
+        Require(featureBytes == 134 && delta != null && delta.Length == OledRadioDelta.PayloadBytes,
+            "OLED delta requires a 134-byte radio feature interface and exactly 40 payload bytes");
+        return BuildOl9Carrier(OledRadioDelta.Page, 0, 0, delta, 0);
+    }
+    static byte[] BuildOl9Carrier(byte page, byte x, byte flags, byte[] payload, int offset) {
         byte[] packet=new byte[56];
-        byte[] header={4,56,1,0,1,0x3F,chunk[7],chunk[8],chunk[10],40};
+        byte[] header={4,56,1,0,1,0x3F,page,x,flags,40};
         Buffer.BlockCopy(header,0,packet,0,header.Length);
-        Buffer.BlockCopy(chunk,12,packet,10,14);Buffer.BlockCopy(chunk,26,packet,25,25);
-        packet[54]=chunk[51];packet[55]=9;
+        Buffer.BlockCopy(payload,offset,packet,10,14);Buffer.BlockCopy(payload,offset+14,packet,25,25);
+        packet[54]=payload[offset+39];packet[55]=9;
         int sum=0;for(int i=3;i<50;i++)sum+=packet[i];packet[50]=(byte)(sum>>8);packet[51]=(byte)sum;
         byte[] input=new byte[53];Buffer.BlockCopy(packet,0,input,0,52);input[52]=packet[54];
         ushort crc=OledProtocol.Crc16CcittFalse(input,0,input.Length);packet[52]=(byte)crc;packet[53]=(byte)(crc>>8);
@@ -265,7 +274,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
     readonly SafeFileHandle handle;
     readonly bool oledStream;
     readonly object oledGate = new object();
-    bool oledAuthorized, oledRuntimeStatusAuthorized, oledShortReportsAuthorized, oledRadioAuthorized;
+    bool oledAuthorized, oledRuntimeStatusAuthorized, oledShortReportsAuthorized, oledRadioAuthorized, oledRadioDeltaAuthorized;
     bool receiverSessionFailed;
     internal readonly G9Hid.Candidate Device;
     public ushort VendorId { get { return 0x1D57; } }
@@ -400,12 +409,12 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             oledAuthorized = oledRuntimeStatusAuthorized = false; throw new OledFirmwareUnsupportedException("The opened device identity changed; OLED operations are disabled.");
         }
         if (Device.Product == 0xFA60 && !discovery && !oledRadioAuthorized)
-            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL9, OLA or OLB discovery on this same handle.");
+            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL9, OLA, OLB, OLD or OLE discovery on this same handle.");
     }
     public byte[] ReadOledFirmware() {
         lock (oledGate) {
             G9Wire.RequireQualifiedOledTransport(Device.Product);
-            oledAuthorized = oledRuntimeStatusAuthorized = oledShortReportsAuthorized = oledRadioAuthorized = false; EnsureOledIdentity(true);
+            oledAuthorized = oledRuntimeStatusAuthorized = oledShortReportsAuthorized = oledRadioAuthorized = oledRadioDeltaAuthorized = false; EnsureOledIdentity(true);
             byte[] reply = ReadFirmware();
             try {
                 var capabilities = OledProtocol.DecodeFirmwareCapabilities(reply);
@@ -414,6 +423,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
                 oledRuntimeStatusAuthorized = capabilities.SupportsRuntimeStatus;
                 oledShortReportsAuthorized = capabilities.SupportsShortWrites;
                 oledRadioAuthorized = capabilities.SupportsRadioWrites;
+                oledRadioDeltaAuthorized = capabilities.SupportsRadioDeltas;
             }
             catch (InvalidDataException error) { throw new OledFirmwareUnsupportedException(error.Message); }
             catch (NotSupportedException error) { throw new OledFirmwareUnsupportedException(error.Message); }
@@ -424,6 +434,22 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
         if(ReadProfile()[0] != 1)
             throw new OledFirmwareUnsupportedException("OLED over the receiver requires active profile 1. No profile is selected automatically.");
     }
+    internal void SendOledDelta(byte[] delta) {
+        lock (oledGate) {
+            if (Device.Product != 0xFA60 || !oledAuthorized || !oledRadioDeltaAuthorized)
+                throw new OledFirmwareUnsupportedException("Radio OLED delta requires OLA, OLB, OLD or OLE discovery on the same receiver handle.");
+            EnsureOledIdentity();
+            byte[] envelope = G9Wire.RadioDeltaCarrier(Device.FeatureBytes, delta);
+            SendOledEnvelope(envelope);
+        }
+    }
+    void SendOledEnvelope(byte[] envelope) {
+        if (G9Hid.HidD_SetFeature(handle, envelope, envelope.Length)) return;
+        int error = Marshal.GetLastWin32Error();
+        if (Device.Product == 0xFA60) receiverSessionFailed = true;
+        oledAuthorized = oledRuntimeStatusAuthorized = false;
+        throw new Win32Exception(error, "OLED SetFeature failed; no further OLED fragments were sent");
+    }
     public void SendOledFeature(byte[] report) {
         lock (oledGate) {
             if (!oledAuthorized) throw new InvalidOperationException("This device handle has not advertised supported OLED firmware");
@@ -433,10 +459,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             // Stream discovery checks profile 1 once. OL9 checks the active
             // profile for each fragment, without a host GET between frames.
             if (Device.Product == 0xFA60 && !oledStream && report[7] == 0 && report[8] == 0) RequireRadioOledProfile();
-            if (!G9Hid.HidD_SetFeature(handle, envelope, envelope.Length)) {
-                if(Device.Product == 0xFA60) receiverSessionFailed = true;
-                oledAuthorized = oledRuntimeStatusAuthorized = false; throw new Win32Exception(Marshal.GetLastWin32Error(), "OLED SetFeature failed; remaining pages were not sent");
-            }
+            SendOledEnvelope(envelope);
             Console.WriteLine("OLED_SEND len={0} usbLen={4} page={1} x={2} flags={3}", report.Length, report[7], report[8], report[10], envelope.Length);
         }
     }
@@ -512,11 +535,11 @@ internal static class G9DeviceProgram {
     static int Main(string[] args) {
         Console.OutputEncoding = new UTF8Encoding(false);
         try {
-            if (args.Length == 0) { Console.WriteLine("G9Device mapping [--active|--profile1..5] | assign --profile N --index N --function HEX --param1 HEX --param2 HEX | settings-read [--profile N] | settings-set --field ID --value VALUE [--profile N] | profile-restore --file <settings snapshot.json> | inspect | profile | firmware | zero | backup | restore <backup.bin> | oled-caps | oled-status | oled-frame --file <480-byte-frame.bin> | oled-stream | caps [--pid2148|fa60] [--backup-dir path]"); return 2; }
+            if (args.Length == 0) { Console.WriteLine("G9Device mapping [--active|--profile1..5] | assign --profile N --index N --function HEX --param1 HEX --param2 HEX | settings-read [--profile N] | settings-set --field ID --value VALUE [--profile N] | profile-restore --file <settings snapshot.json> | inspect | profile | firmware | zero | backup | restore <backup.bin> | oled-caps | oled-status | oled-frame --file <480-byte-frame.bin> | oled-delta --pid fa60 --expected-path <path> --base <visible-frame.bin> --file <new-frame.bin> | oled-stream | caps [--pid2148|fa60] [--backup-dir path]"); return 2; }
             string command = args[0];
-            if (command != "inspect" && command != "mapping" && command != "profile" && command != "profile-restore" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "settings-read" && command != "settings-set" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-stream" && command != "ol6-radio-frame" && command != "caps") throw new ArgumentException("Unknown command");
+            if (command != "inspect" && command != "mapping" && command != "profile" && command != "profile-restore" && command != "firmware" && command != "zero" && command != "backup" && command != "restore" && command != "assign" && command != "settings-read" && command != "settings-set" && command != "oled-caps" && command != "oled-status" && command != "oled-frame" && command != "oled-delta" && command != "oled-stream" && command != "ol6-radio-frame" && command != "caps") throw new ArgumentException("Unknown command");
             ushort pid = 0; string restore = null, expectedPath = null;
-            string frameFile = null; byte[] oledFrame = null;
+            string frameFile = null, baseFrameFile = null; byte[] oledFrame = null, oledDelta = null;
             int? assignmentIndex = null; byte? function = null; byte param1 = 0, param2 = 0;
             int? requestedProfile=null; bool activeMapping=false; string settingField=null,settingValue=null;
             bool logicalFeatureLength=false;
@@ -541,7 +564,8 @@ internal static class G9DeviceProgram {
                 else if (command == "assign" && args[i] == "--param1" && i + 1 < args.Length) param1 = HexByte(args[++i]);
                 else if (command == "assign" && args[i] == "--param2" && i + 1 < args.Length) param2 = HexByte(args[++i]);
                 else if(command=="ol6-radio-frame" && args[i]=="--logical-feature-length" && !logicalFeatureLength) logicalFeatureLength=true;
-                else if ((command == "oled-frame" || command == "ol6-radio-frame") && args[i] == "--file" && i + 1 < args.Length && frameFile == null) frameFile = Path.GetFullPath(args[++i]);
+                else if ((command == "oled-frame" || command == "oled-delta" || command == "ol6-radio-frame") && args[i] == "--file" && i + 1 < args.Length && frameFile == null) frameFile = Path.GetFullPath(args[++i]);
+                else if (command == "oled-delta" && args[i] == "--base" && i + 1 < args.Length && baseFrameFile == null) baseFrameFile = Path.GetFullPath(args[++i]);
                 else if (command == "restore" && restore == null) restore = Path.GetFullPath(args[i]);
                 else throw new ArgumentException("Unexpected command argument");
             }
@@ -556,9 +580,17 @@ internal static class G9DeviceProgram {
             if(command=="settings-set" && (String.IsNullOrEmpty(settingField) || settingValue==null)) throw new ArgumentException("Settings write requires --field and --value");
             if(logicalFeatureLength && (pid!=0xFA60 || expectedPath==null))
                 throw new ArgumentException("The 56-byte feature experiment requires --pid fa60 and --expected-path");
-            if (command == "oled-frame" || command == "ol6-radio-frame") {
+            if (command == "oled-frame" || command == "oled-delta" || command == "ol6-radio-frame") {
                 if (frameFile == null || new FileInfo(frameFile).Length != OledProtocol.BufferBytes) throw new InvalidDataException("OLED upload requires --file pointing to a 480-byte packed frame");
                 oledFrame = File.ReadAllBytes(frameFile); OledProtocol.ValidateFrame(oledFrame);
+            }
+            if (command == "oled-delta") {
+                if (pid != 0xFA60 || expectedPath == null || baseFrameFile == null ||
+                    new FileInfo(baseFrameFile).Length != OledProtocol.BufferBytes)
+                    throw new ArgumentException("OLED delta requires --pid fa60, --expected-path and --base pointing to the 480-byte visible frame.");
+                oledDelta = OledRadioDelta.Encode(File.ReadAllBytes(baseFrameFile), oledFrame);
+                if (oledDelta == null) { Console.WriteLine("OLED_DELTA_TOO_LARGE; use oled-frame for a full upload"); return 4; }
+                if (oledDelta.Length == 0) { Console.WriteLine("OLED_DELTA_UNCHANGED"); return 0; }
             }
             if (command == "assign") { if (!assignmentIndex.HasValue || !function.HasValue) throw new ArgumentException("Assign requires --index and --function"); BindingCatalog.Validate(function.Value, param1, param2); }
             if (command == "restore") {
@@ -573,13 +605,38 @@ internal static class G9DeviceProgram {
             }
             using (var device = new G9Connection(pid,expectedPath,command=="oled-stream")) {
                 if(command=="ol6-radio-frame") { device.WriteOl6RadioExperiment(oledFrame,logicalFeatureLength);return 0; }
-                if (command == "oled-stream") return OledStreaming.RunUtf8(Console.OpenStandardInput(), Console.Out,
-                    new NativeOledTransport(device), canSendRadioFragment: RadioOledInputPriority.IsDesktopIdle);
+                if (command == "oled-delta") {
+                    device.ReadOledFirmware();
+                    device.SendOledDelta(oledDelta);
+                    Thread.Sleep(500);
+                    Console.WriteLine("OLED_DELTA_REPORTS_SENT=1 DISPLAY_VERIFIED=false");
+                    return 0;
+                }
+                if (command == "oled-stream") {
+                    string tracePath=Environment.GetEnvironmentVariable("G9_HUB_OLED_TRACE_DIR");
+                    bool legacyAck = Environment.GetEnvironmentVariable("G9_HUB_OLED_ACK") == "1";
+                    bool legacyPartial = legacyAck || Environment.GetEnvironmentVariable("G9_HUB_PARTIAL_OLED") == "1";
+                    var radioAck = new RadioOledAcknowledgements();
+                    using(var receiver = new G9TelemetryReader(radioAck.Observe))
+                    using(TextWriter trace=String.IsNullOrEmpty(tracePath)?null:
+                        new StreamWriter(new FileStream(Path.Combine(tracePath,"oled-"+Process.GetCurrentProcess().Id+".log"),
+                            FileMode.CreateNew,FileAccess.Write,FileShare.Read),new UTF8Encoding(false))) {
+                        return OledStreaming.RunUtf8(Console.OpenStandardInput(),Console.Out,new NativeOledTransport(device),
+                            canSendRadioFragment:RadioOledInputPriority.IsDesktopIdle,sendRadioDelta:device.SendOledDelta,trace:trace,
+                            startRadioAcknowledgements:capabilities => {
+                                if (!capabilities.SupportsRadioDeltaReplay && !legacyAck) return null;
+                                receiver.StartReceiver();
+                                return radioAck;
+                            },
+                            canSendRadioLive:RadioOledInputPriority.NoMouseButtonHeld,allowLegacyPartial:legacyPartial);
+                    }
+                }
                 if (command == "oled-caps" || command == "oled-frame" || command == "oled-status") {
                     var uploader = new OledSender(new NativeOledTransport(device)); FirmwareCapabilities capabilities = uploader.Discover();
                     Console.WriteLine("OLED_CAPS_JSON " + new JavaScriptSerializer().Serialize(new { supported = true, extension = capabilities.Extension, width = capabilities.Width,
                         height = capabilities.VisibleHeight, bufferBytes = capabilities.BufferBytes, supportsRuntimeStatus = capabilities.SupportsRuntimeStatus,
-                        supportsShortWrites = capabilities.SupportsShortWrites, supportsRadioWrites=capabilities.SupportsRadioWrites, physicalVerified = false }));
+                        supportsShortWrites = capabilities.SupportsShortWrites, supportsRadioWrites=capabilities.SupportsRadioWrites,
+                        supportsRadioDeltas=capabilities.SupportsRadioDeltas, physicalVerified = false }));
                     if (command == "oled-status") {
                         if (!capabilities.SupportsRuntimeStatus) { Console.WriteLine("OLED_STATUS_UNSUPPORTED"); return 4; }
                         Console.WriteLine("OLED_STATUS_DATA " + Convert.ToBase64String(uploader.ReadRuntimeStatusFrame()));

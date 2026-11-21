@@ -125,6 +125,11 @@ checks for new input before every fragment and defers an interrupted replay. A
 transport error ends that attempt. Recovery does not poll mouse settings, and
 ordinary live widgets keep their scheduled update path.
 
+Automatic restoration of a saved static frame on startup or after changing
+connections also uses the guarded sender over 2.4 GHz. A deferred transfer
+retries when desktop input pauses. A switch to USB clears the pending radio
+attempt and uses the wired restore path.
+
 `G9Device.exe telemetry --duration-ms 500 --pid 2148` can safely be implemented
 by opening **only** the matched page000A collection for overlapped `ReadFile`,
 using shared access, bounded cancellation and the existing selected-device

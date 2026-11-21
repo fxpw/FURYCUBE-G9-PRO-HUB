@@ -15,6 +15,32 @@
 .equ FIRST_ALLOCATION, 0x00404f34
 .equ META, 964
 
+/* Publish the inactive bank after the complete image has been validated.
+ * r0=retention CRC16, r7=metadata. Returns r0=2. */
+.macro g9_publish_frame
+    strh r0,[r7,#12]
+    ldrb r0,[r7]
+    movs r1,#1
+    eors r0,r1
+    strb r0,[r7]
+    strb r1,[r7,#1] /* valid */
+    strb r1,[r7,#4] /* custom owner */
+    strb r1,[r7,#6] /* restore pending */
+    movs r0,#0
+    strb r0,[r7,#2]
+    strb r0,[r7,#16]
+.ifdef G9_OLED_DIRTY_DRAW
+    strh r0,[r7,#DELTA_DIRTY_MASK] /* Full frame unless a validated delta supplies a mask. */
+.endif
+.ifdef G9_EMBEDDED_OLED
+    strb r0,[r7,#LOCAL_OWNER]
+.endif
+    ldr r0,[r7,#8]
+    adds r0,#1
+    str r0,[r7,#8]
+    movs r0,#2
+.endm
+
 .global g9_store_boot_hook
 .type g9_store_boot_hook,%function
 .thumb_func
@@ -64,6 +90,9 @@ g9_store_boot_hook:
     strb r0,[r1,#5] /* Renderer cannot remain active through reset. */
     strb r0,[r1,#16]
     strb r0,[r1,#19] /* A surviving frame does not prove controller init. */
+.ifdef G9_OLED_DIRTY_DRAW
+    strh r0,[r1,#DELTA_DIRTY_MASK]
+.endif
     ldrb r0,[r1,#4]
     strb r0,[r1,#6] /* Custom owner requests a complete main-loop restore. */
     b .Lpublish
@@ -171,21 +200,7 @@ g9_store_chunk:
     adds r0,r0,r1
 .Lcrc_staged:
     bl .Lframe_crc
-    strh r0,[r7,#12]
-    ldrb r0,[r7]
-    movs r1,#1
-    eors r0,r1
-    strb r0,[r7]
-    strb r1,[r7,#1] /* valid */
-    strb r1,[r7,#4] /* custom owner */
-    strb r1,[r7,#6] /* restore pending */
-    movs r0,#0
-    strb r0,[r7,#2]
-    strb r0,[r7,#16]
-    ldr r0,[r7,#8]
-    adds r0,#1
-    str r0,[r7,#8]
-    movs r0,#2
+    g9_publish_frame
     b .Lchunk_return
 .Lstaged:
     movs r0,#1

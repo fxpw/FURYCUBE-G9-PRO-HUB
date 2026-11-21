@@ -33,6 +33,206 @@ internal static class OledStreamTests {
         byte[] pixels = new byte[480]; pixels[0] = first; pixels[479] = last;
         return "FRAME " + Convert.ToBase64String(pixels);
     }
+    static string Partial(byte first) {return "LIVE_DELTA " + Frame(first,0).Substring(6) + "\n";}
+    static FakeTransport RadioB() {return new FakeTransport { Pid=0xFA60,
+        Version=new byte[] {11,5,1,1,8,(byte)'O',(byte)'L',(byte)'B'} };}
+    static byte[] Pixels(byte first) { var frame = new byte[480]; frame[0] = first; return frame; }
+    static byte[] Receipt(byte[] pixels) {
+        ushort crc = OledProtocol.Crc16CcittFalse(pixels, 0, pixels.Length);
+        return new byte[] {3, 0xC9, 0xD1, (byte)crc, (byte)(crc >> 8)};
+    }
+    static void CheckConfirmedRadioFrames() {
+        var radio = RadioB(); radio.Version[7] = (byte)'D';
+        var delays = new List<int>();
+        var sender = new OledSender(radio, delays.Add); sender.Discover();
+        var receipts = new RadioOledAcknowledgements();
+        var stream = new ConfirmedRadioOledStream(receipts);
+        var sent = new List<byte[]>();
+        var first = Pixels(1); var next = Pixels(2); var newer = Pixels(3);
+        long elapsed = 0;
+        bool idle = true;
+        int reports, confirmations; string transfer;
+        Func<byte[],string> update = frame => stream.Send(sender, frame, true, () => idle, sent.Add,
+            () => elapsed, out reports, out transfer, out confirmations);
+
+        receipts.Observe(0xFA60, Receipt(first));
+        Check(update(first) == OledStreamCommand.Deferred && radio.Writes.Count == 12 && delays.TrueForAll(v => v == 500),
+            "full frame waits for a fresh receipt and uses the qualified radio pacing");
+        receipts.Observe(0x2148, Receipt(first));
+        receipts.Observe(0xFA60, Receipt(next));
+        Check(update(next) == OledStreamCommand.Deferred && sent.Count == 0,
+            "wrong receiver or CRC cannot advance the delta base");
+        receipts.Observe(0xFA60, Receipt(first));
+        Check(update(next) == OledStreamCommand.Deferred && sent.Count == 1 &&
+            Convert.ToBase64String(sent[0]) == Convert.ToBase64String(OledRadioDelta.Encode(first, next)),
+            "a later tick advances from confirmed pixels and holds the next delta");
+        Check(update(newer) == OledStreamCommand.Deferred && sent.Count == 1,
+            "a newer frame cannot overtake an in-flight delta");
+        receipts.Observe(0xFA60, Receipt(next));
+        Check(update(next) == OledStreamCommand.Sent && update(next) == OledStreamCommand.Unchanged,
+            "a receipt completes the matching request and identical pixels do not resend");
+
+        Check(update(newer) == OledStreamCommand.Deferred && sent.Count == 2, "second unconfirmed delta is sent once");
+        elapsed = 2501; idle = false;
+        Check(update(newer) == OledStreamCommand.Deferred && radio.Writes.Count == 12 && sent.Count == 2,
+            "timeout clears the base and recovery yields to desktop input");
+        idle = true;
+        Check(update(newer) == OledStreamCommand.Deferred && radio.Writes.Count == 24 && sent.Count == 2,
+            "recovery sends a guarded full frame and waits for its own receipt");
+        receipts.Observe(0xFA60, Receipt(newer));
+        Check(update(newer) == OledStreamCommand.Sent, "matching recovery completes");
+
+        var large = Pixels(3);
+        for (int index = 32; index < 90; index++) large[index] = 0x12;
+        idle = false;
+        byte[] intermediate;
+        byte[] firstStep = OledRadioDelta.EncodeStep(newer, large, out intermediate);
+        Check(OledRadioDelta.Encode(newer, large) == null && intermediate[60] == 0x12 && intermediate[61] == 0 &&
+            Convert.ToBase64String(firstStep) == Convert.ToBase64String(OledRadioDelta.Encode(newer, intermediate)),
+            "a large change has a valid bounded intermediate frame and matching wire CRC");
+        Check(update(large) == OledStreamCommand.Deferred && sent.Count == 3 && radio.Writes.Count == 24,
+            "a large change advances from the confirmed base while the mouse is in use");
+        receipts.Observe(0xFA60, Receipt(large));
+        Check(update(large) == OledStreamCommand.Deferred && sent.Count == 3,
+            "the final CRC cannot acknowledge an intermediate frame");
+        receipts.Observe(0xFA60, Receipt(intermediate));
+        Check(update(large) == OledStreamCommand.Deferred && sent.Count == 4 && radio.Writes.Count == 24,
+            "the intermediate CRC permits the next packet during movement");
+        receipts.Observe(0xFA60, Receipt(large));
+        Check(update(large) == OledStreamCommand.Sent, "the final patch advances the complete frame");
+    }
+    static void CheckRadioReplay() {
+        var radio = RadioB(); radio.Version[7] = (byte)'E';
+        var sender = new OledSender(radio, delay => {}); var capabilities = sender.Discover();
+        Check(capabilities.SupportsRadioDeltaReplay, "OLE advertises exact delta replay");
+        var receipts = new RadioOledAcknowledgements();
+        var stream = new ConfirmedRadioOledStream(receipts, capabilities.SupportsRadioDeltaReplay);
+        var sent = new List<byte[]>();
+        long elapsed = 0;
+        bool idle = true;
+        int reports, confirmations; string transfer;
+        Func<byte[],string> update = frame => stream.Send(sender, frame, true, () => idle, sent.Add,
+            () => elapsed, out reports, out transfer, out confirmations);
+        update(Pixels(1));
+        receipts.Observe(0xFA60, Receipt(Pixels(1)));
+        update(Pixels(2));
+        idle = false;
+        elapsed = 1199;
+        Check(update(Pixels(3)) == OledStreamCommand.Deferred && sent.Count == 1,
+            "no duplicate is sent before the retry interval");
+        elapsed = 1200;
+        Check(update(Pixels(3)) == OledStreamCommand.Deferred && sent.Count == 2 && sent[0] == sent[1] && radio.Writes.Count == 12,
+            "a retry during input sends the exact pending patch without beginning a full frame");
+        receipts.Observe(0xFA60, Receipt(Pixels(2)));
+        Check(update(Pixels(3)) == OledStreamCommand.Deferred && sent.Count == 3 &&
+            Convert.ToBase64String(sent[2]) == Convert.ToBase64String(OledRadioDelta.Encode(Pixels(2), Pixels(3))),
+            "the retry receipt releases the newer frame against the recovered base");
+        elapsed = 2400;
+        update(Pixels(4));
+        elapsed = 3600;
+        update(Pixels(4));
+        elapsed = 10000;
+        Check(update(Pixels(4)) == OledStreamCommand.Deferred && sent.Count == 5 && radio.Writes.Count == 12 &&
+            sent[2] == sent[3] && sent[2] == sent[4],
+            "at most two retries precede guarded full recovery");
+        idle = true;
+        Check(update(Pixels(4)) == OledStreamCommand.Deferred && radio.Writes.Count == 24,
+            "a pause opens the full recovery path after replay attempts are exhausted");
+    }
+    static void CheckHeldMouseButton() {
+        var radio = RadioB(); radio.Version[7] = (byte)'E';
+        var receipts = new RadioOledAcknowledgements();
+        var writes = new List<byte[]>();
+        var trace = new StringWriter();
+        int tick = 0;
+        string input = Partial(1) + Partial(1) + Partial(2) + Partial(3) + Partial(3) + Partial(3) + Partial(3);
+
+        OledStreaming.Run(new StringReader(input), new StringWriter(), radio, delay => {}, () => true,
+            packet => {
+                writes.Add(packet);
+                if (writes.Count == 2) receipts.Observe(0xFA60, Receipt(Pixels(2)));
+            }, () => tick * 1000L, trace, capabilities => {
+                Check(capabilities.SupportsRadioDeltaReplay && radio.Reads == 1,
+                    "radio receipt listener starts after a single firmware discovery");
+                return receipts;
+            }, () => {
+                if (++tick == 3) receipts.Observe(0xFA60, Receipt(Pixels(1)));
+                return tick != 1 && tick != 4 && tick != 5;
+            });
+
+        Check(radio.Writes.Count == 12 && writes.Count == 3 && Object.ReferenceEquals(writes[0], writes[1]),
+            "held button pauses baseline and retries without spending attempts or replacing the pending patch");
+        Check(trace.ToString().Contains("frame=1 type=button-held reports=0") &&
+            trace.ToString().Contains("frame=4 type=button-held reports=0") &&
+            trace.ToString().Contains("frame=5 type=button-held reports=0") &&
+            trace.ToString().Contains("frame=6 type=delta-retry reports=1") &&
+            trace.ToString().Contains("frame=7 type=delta reports=1"),
+            "release resumes the delayed retry and a confirmed base permits the next delta");
+
+        var legacy = RadioB();
+        OledStreaming.Run(new StringReader(Partial(1) + Partial(2)), new StringWriter(), legacy,
+            delay => {}, () => true, packet => { throw new Exception("Legacy OLB delta must remain opt-in"); },
+            startRadioAcknowledgements: capabilities => { throw new Exception("OLB has no receipts"); },
+            allowLegacyPartial: false);
+        Check(legacy.Writes.Count == 24, "a normal launch uses guarded full frames on OLB");
+    }
+    static void CheckPartialLiveFrames() {
+        var radio=RadioB();var replies=new StringWriter();var wire=new List<byte[]>();
+        var trace=new StringWriter();
+        var input=new StringBuilder(Partial(0));
+        for(byte next=1;next<=8;next++)input.Append(Partial(next));
+        input.Append(Partial(8));
+        for(int fragment=0;fragment<12;fragment++)input.Append(Partial(9));
+        input.Append("STOP\n");
+        int guardChecks=0;
+        OledStreaming.Run(new StringReader(input.ToString()),replies,radio,delay=>{},
+            ()=>++guardChecks!=13,wire.Add,()=>0,trace);
+        Check(radio.Writes.Count==24&&wire.Count==8&&guardChecks==26&&radio.Writes[12][12]==9,
+            "an initial frame is idle-guarded, eight deltas use one report each and a busy anchor is deferred");
+        string[] acknowledgements=replies.ToString().Split(new[]{'\r','\n'},StringSplitOptions.RemoveEmptyEntries);
+        Check(acknowledgements[10]=="OLED_FRAME_DEFERRED 10"&&acknowledgements[11]=="OLED_FRAME_DEFERRED 11"&&
+            acknowledgements[22]=="OLED_FRAME_SENT 22","an interrupted refresh advances by one fragment per request and confirms the complete frame only");
+        Check(radio.Reads==1&&radio.StatusReads==0,"partial live uses one discovery without periodic GET");
+        Check(trace.ToString().Contains("frame=2 type=delta reports=1 result=OLED_FRAME_SENT ")&&
+            trace.ToString().Contains("frame=10 type=refresh reports=0 result=OLED_FRAME_DEFERRED ")&&
+            trace.ToString().Contains("frame=11 type=refresh reports=1 result=OLED_FRAME_DEFERRED "),
+            "hardware trace distinguishes a single delta from a guarded full-frame deferral");
+
+        radio=RadioB();replies=new StringWriter();wire.Clear();
+        int tick=0;
+        var repeated=new StringBuilder(Partial(0)+Partial(1)+Partial(1));
+        for(int fragment=0;fragment<12;fragment++)repeated.Append(Partial(1));
+        OledStreaming.Run(new StringReader(repeated.Append("STOP\n").ToString()),replies,radio,delay=>{},
+            ()=>true,wire.Add,()=>tick<3?tick++:15001);
+        Check(wire.Count==1&&radio.Writes.Count==24&&replies.ToString().Contains("OLED_FRAME_UNCHANGED 3"),
+            "unchanged frame sends nothing until the expiry refresh repairs a silent loss");
+
+        radio=RadioB();wire.Clear();replies=new StringWriter();guardChecks=0;
+        var large=new byte[480];for(int index=0;index<30;index++)large[index]=1;
+        OledStreaming.Run(new StringReader(Partial(0)+"LIVE_DELTA "+Convert.ToBase64String(large)+"\n"+Partial(1)+"STOP\n"),
+            replies,radio,delay=>{},()=>++guardChecks<=14,wire.Add,()=>0);
+        Check(radio.Writes.Count==13&&wire.Count==0&&replies.ToString().Contains("OLED_FRAME_DEFERRED 3"),
+            "a full refresh interrupted after its first fragment pauses before another report");
+
+        radio=RadioB();wire.Clear();replies=new StringWriter();
+        large[200]=0x31;
+        input=new StringBuilder(Partial(0)+"LIVE_DELTA "+Convert.ToBase64String(large)+"\n");
+        for(int fragment=1;fragment<12;fragment++)input.Append(Partial(2));
+        OledStreaming.Run(new StringReader(input.Append("STOP\n").ToString()),replies,radio,delay=>{},()=>true,wire.Add,()=>0);
+        Check(radio.Writes.Count==24&&radio.Writes[17][12]==0x31&&wire.Count==0&&
+            replies.ToString().Contains("OLED_FRAME_DEFERRED 13"),
+            "a progressive refresh keeps its original pixels and never acknowledges a newer frame it did not send");
+
+        radio=RadioB();radio.Version[7]=(byte)'A';wire.Clear();
+        OledStreaming.Run(new StringReader(Partial(0)+Partial(1)+"STOP\n"),new StringWriter(),radio,delay=>{},
+            ()=>true,wire.Add,()=>0);
+        Check(radio.Writes.Count==24&&wire.Count==0,"OLA uses guarded full frames");
+
+        var usb=RadioB();usb.Pid=0x2148;
+        OledStreaming.Run(new StringReader(Partial(0)+Partial(1)+"STOP\n"),new StringWriter(),usb,delay=>{},
+            ()=>{throw new Exception("USB cannot consult radio input gate");},wire.Add,()=>0);
+        Check(usb.Writes.Count==24&&wire.Count==0,"USB uses ordinary full frames");
+    }
     static void CheckRadioInputPriority() {
         var radio = new FakeTransport { Pid = 0xFA60, Version = new byte[] { 11, 5, 1, 1, 8, (byte)'O', (byte)'L', (byte)'9' } };
         var output = new StringWriter();
@@ -56,7 +256,8 @@ internal static class OledStreamTests {
 
         var usb = new FakeTransport();
         OledStreaming.Run(new StringReader(live + "\nSTOP\n"), new StringWriter(), usb,
-            delegate(int value) { }, delegate { throw new Exception("USB must not query desktop activity"); });
+            delegate(int value) { }, delegate { throw new Exception("USB must not query desktop activity"); },
+            canSendRadioLive: () => { throw new Exception("USB must not query held buttons"); });
         Check(usb.Writes.Count == 4, "USB live frame is fully transmitted without an input check");
     }
     static void Reject(string command, string name) {
@@ -106,6 +307,9 @@ internal static class OledStreamTests {
     }
     static int Main() { try {
         CheckByteTransport();
+        CheckPartialLiveFrames();
+        CheckConfirmedRadioFrames();
+        CheckRadioReplay();
         var oldStatus = new FakeTransport(); var oldStatusOutput = new StringWriter();
         OledStreaming.Run(new StringReader("STATUS\nSTATUS\nSTOP\n"),oldStatusOutput,oldStatus,delegate(int value){});
         Check(oldStatus.Reads==1&&oldStatus.StatusReads==0&&oldStatus.Writes.Count==0,"OL2 STATUS never invokes GET22 or any image report");
@@ -164,6 +368,7 @@ internal static class OledStreamTests {
         catch (InvalidDataException) { checks++; }
         Check(stock.Writes.Count == 0 && stockOutput.ToString() == "", "stock discovery has no READY or SET22");
         CheckRadioInputPriority();
+        CheckHeldMouseButton();
         Console.WriteLine("PASS " + checks + " fake OLED stream checks; no USB, no physical display claim");
         return 0;
     } catch (Exception error) { Console.Error.WriteLine(error); return 1; } }

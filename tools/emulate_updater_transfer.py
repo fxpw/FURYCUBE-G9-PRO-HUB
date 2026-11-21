@@ -29,13 +29,17 @@ def ret(u,result=0,pop=0):
     u.reg_write(UC_X86_REG_ESP,s+4+pop)
     u.reg_write(UC_X86_REG_EIP,u32(u,s))
 
-def run(mode='normal',transfer_length=0x21000, bounded_erases=False, image_bytes=None, payload_data=None):
+def run(mode='normal',transfer_length=0x21000, bounded_erases=False, image_bytes=None, payload_data=None,
+        allow_reloc_growth=False):
     assert transfer_length in (0x21000, 0x22000), 'Only the reviewed 33/34-page test sizes'
     assert not bounded_erases or transfer_length == 0x22000
-    u=Uc(UC_ARCH_X86,UC_MODE_32)
-    u.mem_map(BASE,(pe.OPTIONAL_HEADER.SizeOfImage+4095)&~4095)
     loaded = pe if image_bytes is None else pefile.PE(data=image_bytes)
-    assert loaded.OPTIONAL_HEADER.SizeOfImage == pe.OPTIONAL_HEADER.SizeOfImage
+    image_size = loaded.OPTIONAL_HEADER.SizeOfImage
+    original_size = pe.OPTIONAL_HEADER.SizeOfImage
+    assert loaded.OPTIONAL_HEADER.ImageBase == BASE
+    assert image_size == original_size or (allow_reloc_growth and image_size == original_size + 4096)
+    u=Uc(UC_ARCH_X86,UC_MODE_32)
+    u.mem_map(BASE,(image_size+4095)&~4095)
     u.mem_write(BASE,loaded.get_memory_mapped_image())
     if bounded_erases:
         # Offline proposal ONLY. Preserve the original erase footprint while

@@ -42,8 +42,9 @@ The next frame was confirmed about 0.7 seconds after release.
 Launching the registered Windows startup command in the current session
 started the local build in the tray, read the active profile over 2.4 GHz
 and restored the saved static frame with confirmation from the mouse.
-An actual Windows sign-in remains to be checked. The OLE implementation
-is pending a source release.
+An actual Windows sign-in remains to be checked. The repository includes
+the OLE source and offline validation tools. The locally built updater
+and embedded layout are kept with the private hardware test materials.
 
 ## Quick input check
 
@@ -168,10 +169,11 @@ Portable examples:
 | [Clock, DPI and system](examples/screens/clock-dpi-system.g9screen.json) | Clock, numeric DPI, CPU and RAM |
 | [Positioned image](examples/screens/positioned-image.g9screen.json) | An 84 × 20 image at X=18, Y=4, with its bundled asset |
 
-**The published full-frame path supports OL4 through OL9, OLA and OLB over USB.**
-For 2.4 GHz it supports OL9, OLA and OLB with active profile 1. OL9 was
-used to verify full-frame delivery on both connections. See
-[firmware compatibility](docs/FIRMWARE.md).
+**The full-frame path supports OL4 through OL9, OLA, OLB, OLD and OLE over USB.**
+For 2.4 GHz it supports OL9, OLA, OLB, OLD and OLE with active profile 1.
+On OLE, the HUB enables confirmed background updates after firmware discovery.
+See [firmware compatibility](docs/FIRMWARE.md) and
+the [radio OLED notes](docs/OL9-CARRIER.md).
 
 The HUB can resend its cached frame after reconnection. When the 2.4 GHz
 receiver stays plugged in, it detects the mouse's return through battery

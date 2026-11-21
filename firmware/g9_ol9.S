@@ -16,6 +16,21 @@
 .equ STOCK_MEMCPY, 0x00024f9d
 .equ STOCK_OLED_INIT, 0x0003cddf
 .equ STOCK_DRAW, 0x0003cee7
+.ifdef G9_OLED_RADIO_ACK
+.equ RADIO_ACK_GENERATION, 28
+.endif
+.ifdef G9_OLED_RADIO_RETRY
+.equ RADIO_ACK_DELTA_GENERATION, 32
+.equ RADIO_ACK_DELTA_SIGNATURE, 36
+.endif
+.ifdef G9_OLED_DIRTY_DRAW
+.equ DELTA_DIRTY_MASK, 24 /* Aligned halfword in the reserved store metadata. */
+.endif
+.ifdef G9_EMBEDDED_OLED
+.equ LOCAL_OWNER, 20
+.equ LOCAL_LEVEL, 21
+.equ LOCAL_DRAWN_LEVEL, 22
+.endif
 
 .global g9_ol9_set_hook
 .type g9_ol9_set_hook,%function
@@ -267,6 +282,9 @@ g9_ol9_init_done_hook:
     strb r1,[r0,#6]
     movs r1,#0
     strb r1,[r0,#16]
+.ifdef G9_OLED_DIRTY_DRAW
+    strh r1,[r0,#DELTA_DIRTY_MASK]
+.endif
     movs r1,#1
     strb r1,[r0,#19]
 .Linit_done:
@@ -309,7 +327,14 @@ g9_ol9_restore_tick:
     adds r4,r0,r1
     ldrb r0,[r4,#1]
     cmp r0,#1
+.ifdef G9_EMBEDDED_OLED
+    bne .Llocal_restore
+    ldrb r0,[r4,#LOCAL_OWNER]
+    cmp r0,#1
+    beq .Llocal_restore
+.else
     bne .Ltick_done
+.endif
     ldrb r0,[r4,#4]
     cmp r0,#1
     bne .Ltick_done
@@ -319,14 +344,37 @@ g9_ol9_restore_tick:
     ldr r0,=0x00400a7a
     ldrb r0,[r0]
     cmp r0,#0
+.ifdef G9_OLED_DIRTY_DRAW
+    bne .Ldraw_paused
+.else
     bne .Ltick_done
+.endif
     ldr r0,=0x00400af2
     ldrb r0,[r0]
     cmp r0,#0
+.ifdef G9_OLED_DIRTY_DRAW
+    bne .Ldraw_paused
+.else
     bne .Ltick_done
+.endif
     ldrb r6,[r4,#16]
     cmp r6,#11
     bhi .Ltick_done
+.ifdef G9_OLED_DIRTY_DRAW
+    ldrh r7,[r4,#DELTA_DIRTY_MASK]
+    cmp r7,#0
+    beq .Ldraw_chunk
+.Lnext_dirty_chunk:
+    movs r0,#1
+    lsls r0,r6
+    tst r7,r0
+    bne .Ldraw_chunk
+    adds r6,#1
+    cmp r6,#12
+    blo .Lnext_dirty_chunk
+    b .Lredraw_done
+.Ldraw_chunk:
+.endif
     movs r0,r6
     movs r1,#0
 .Lpage_div:
@@ -358,9 +406,33 @@ g9_ol9_restore_tick:
     adds r6,#1
     strb r6,[r4,#16]
     cmp r6,#12
+.ifdef G9_OLED_DIRTY_DRAW
+    beq .Lredraw_done
+    ldrh r1,[r4,#DELTA_DIRTY_MASK]
+    cmp r1,#0
+    beq .Ltick_done
+    lsrs r1,r6
     bne .Ltick_done
+.Lredraw_done:
+    movs r0,#0
+    strh r0,[r4,#DELTA_DIRTY_MASK]
+.else
+    bne .Ltick_done
+.endif
     strb r0,[r4,#6]
     strb r0,[r4,#16]
+.ifdef G9_EMBEDDED_OLED
+    b .Ltick_done
+.Llocal_restore:
+    bl .Llocal_tick
+.endif
+.ifdef G9_OLED_DIRTY_DRAW
+    b .Ltick_done
+.Ldraw_paused:
+    movs r0,#0
+    strb r0,[r4,#16]
+    strh r0,[r4,#DELTA_DIRTY_MASK]
+.endif
 .Ltick_done:
     add sp,#4
     pop {r4,r5,r6,r7,pc}
@@ -419,10 +491,31 @@ g9_ol9_version_hook:
     strb r3, [r2, #2]
     movs r3, #0x4c
     strb r3, [r2, #3]
+.ifdef G9_OLED_RADIO_ACK
+.ifdef G9_OLED_RADIO_RETRY
+    movs r3, #0x45
+.else
+    movs r3, #0x44
+.endif
+.else
+.ifdef G9_OLED_DIRTY_DRAW
+    movs r3, #0x43
+.else
+.ifdef G9_OLED_DELTA_FAST_WAIT
+    movs r3, #0x42
+.else
+.ifdef G9_OLED_DELTA
+    movs r3, #0x41
+.else
     movs r3, #0x39
+.endif
+.endif
+.endif
+.endif
     strb r3, [r2, #4]
     bx lr
 .size g9_ol9_version_hook, .-g9_ol9_version_hook
+
 
 /* Hook 0x342A4, replacing STRB r2,[r0,#11] / BEQ 0x342B2.
  * The idle FSM samples report/selector before checking its pending flag.
@@ -802,6 +895,25 @@ g9_ol9_radio_set_hook:
     subs r0, #1
     subs r1, #1
     bne .Lcarrier_pixels_low
+.ifdef G9_OLED_DELTA
+    cmp r5,#0xfe
+    bne .Lcarrier_full_chunk
+    /* This carrier owns no native profile selection. Clear the selector
+     * before either publishing the delta or rejecting its payload. */
+    ldr r1,=0x00400b9f
+    movs r0,#0
+    strb r0,[r1]
+    orrs r6,r7
+    bne .Lcarrier_bad
+    movs r0,r4
+    adds r0,#12
+    bl .Lstore_delta_entry
+    cmp r0,#2
+    bne .Lcarrier_bad
+    /* No initialize flag. A verified base already owns display state. */
+    b .Lcommit_wake
+.Lcarrier_full_chunk:
+.endif
     movs r0, #0x22
     strb r0, [r4]
     movs r0, #64
@@ -883,3 +995,77 @@ g9_ol9_radio_prefix_hook:
 .size g9_ol9_radio_prefix_hook, .-g9_ol9_radio_prefix_hook
 .balign 4
 .ltorg
+
+.ifdef G9_EMBEDDED_OLED
+.include "firmware/g9_embedded_oled.S"
+.endif
+.ifdef G9_OLED_DELTA
+.include "firmware/g9_oled_delta.S"
+.endif
+
+.ifdef G9_OLED_RADIO_ACK
+/* Hook 0x35EBC replaces CMP r0,#0 / BEQ 0x35F64. Stock notifications
+ * and all five ordinary-input predicates have priority over the probe. */
+.global g9_radio_ack_idle_hook
+.type g9_radio_ack_idle_hook,%function
+.thumb_func
+g9_radio_ack_idle_hook:
+    cmp r0,#0
+    bne .Lack_input
+    bl .Llookup
+    cmp r0,#0
+    beq .Lack_idle
+    ldr r1,=META
+    adds r3,r0,r1
+    ldrb r0,[r3,#1]       /* Valid committed frame. */
+    ldrb r1,[r3,#4]       /* Host owns the display. */
+    ands r0,r1
+    ldrb r1,[r3,#19]      /* Controller initialized. */
+    ands r0,r1
+    cmp r0,#1
+    bne .Lack_idle
+    ldrb r0,[r3,#6]       /* Renderer still has work. */
+    ldrb r1,[r3,#LOCAL_OWNER]
+    orrs r0,r1
+    ldr r1,=0x00400a7a   /* Asleep. */
+    ldrb r1,[r1]
+    orrs r0,r1
+    ldr r1,=0x00400af2   /* User disabled the display. */
+    ldrb r1,[r1]
+    orrs r0,r1
+    bne .Lack_idle
+    ldr r0,[r3,#8]
+    ldr r1,[r3,#RADIO_ACK_GENERATION]
+    cmp r0,r1
+    beq .Lack_idle
+    str r0,[r3,#RADIO_ACK_GENERATION]
+    ldrh r2,[r3,#12]     /* Existing CRC-16 of the entire drawn frame. */
+    movs r0,#0x35
+    strb r0,[r4]
+    movs r0,#0xc9
+    strb r0,[r4,#1]
+    movs r0,#0xd1
+    strb r0,[r4,#2]
+    strb r2,[r4,#3]
+    lsrs r2,#8
+    strb r2,[r4,#4]
+    adds r1,r4,#5
+    movs r0,#0
+    movs r2,#27
+.Lack_clear_tail:
+    strb r0,[r1]
+    adds r1,#1
+    subs r2,#1
+    bne .Lack_clear_tail
+    ldr r0,=0x00035dff   /* Set the native queue-ready flag and return. */
+    bx r0
+.Lack_idle:
+    ldr r0,=0x00035f65
+    bx r0
+.Lack_input:
+    ldr r0,=0x00035ec1
+    bx r0
+.size g9_radio_ack_idle_hook,.-g9_radio_ack_idle_hook
+.balign 4
+.ltorg
+.endif

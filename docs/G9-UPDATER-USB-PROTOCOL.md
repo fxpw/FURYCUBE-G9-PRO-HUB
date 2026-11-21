@@ -73,6 +73,19 @@ The previously documented NVM effects of normal app entry are in
 The host contains no verified alternate electrical/button/emergency entry
 sequence for an unusable main application.
 
+## Receiver transport
+
+The official 1.08 updater on disk was rechecked by SHA-256 and by the static
+HID-call audit. Its normal-to-loader path is wired: it selects 2142 or 2148,
+then all programming is on A745:0033. There is no FA60 selection in that
+workflow. The paired 2.4 GHz receiver's verified configuration and OLED
+SETs do not establish that it can address the programming loader.
+The local BK3633 SDK mirror has a USB boot project for the 2.4 GHz application
+and OTA profile code in a separate HiLink application. Neither supplies an
+identified G9 PRO update protocol through the paired receiver. A physical
+radio update would require evidence of receiver forwarding, full-image
+verification and a reachable recovery path after an interrupted update.
+
 ## Loader packet shapes actually emitted
 
 Each loader `hid_write` supplies 65 bytes: report ID 0 followed by 64 logical bytes.

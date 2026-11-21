@@ -71,6 +71,59 @@ internal static class ScreenBackgroundTests {
         }
         await RunResume(directory);
         await RunRadioResume(directory);
+        await RunRadioStartupResume(directory);
+        await RunPartialLive(directory);
+    }
+    static async Task RunPartialLive(string directory) {
+        int manual=0, guard=0, partial=0;
+        using(var editor=new G9ScreenEditor(delegate{},pixels=>{manual++;return Task.FromResult("manual");},
+            savedEditorFile:Path.Combine(directory,"radio-delta.json"),backgroundServices:false,
+            liveFrameSender:pixels=>{guard++;return Task.FromResult("guarded");},
+            liveDeltaSender:pixels=>{partial++;return Task.FromResult("partial");})){
+            editor.AllowDevice(true);
+            await editor.UploadCurrent();
+            await editor.ResumeDisplay();
+            await editor.CheckRadioRestore(new TelemetrySnapshot(),true);
+            Check(manual==1&&guard==1&&partial==0,"automatic static replay stays on the guarded full-frame path");
+            await editor.ResumeLive();
+            Check(partial==1&&editor.IsLive,"radio live widgets enter the opt-in partial path");
+            editor.SuspendDevice("USB selected");
+            editor.AllowDevice();
+            await editor.ResumeDisplay();
+            Check(manual==2&&partial==1&&editor.IsLive,"USB live widgets use the ordinary full-frame sender");
+        }
+    }
+    static async Task RunRadioStartupResume(string directory) {
+        string projectFile=Path.Combine(directory,"radio-startup-resume.json");
+        var original=new byte[480];original[0]=13;
+        var cache=new OledResumeCache();cache.Remember(original,false);cache.Save(projectFile+".last-frame");
+        int unguarded=0,guarded=0;
+        Func<byte[],Task<string>> manualSend=pixels=>{unguarded++;return Task.FromResult("USB");};
+        Func<byte[],Task<string>> guardedSend=pixels=>{
+            guarded++;Check(Same(original,pixels),"startup replay sends the saved static frame");
+            return Task.FromResult(guarded==1?null:"radio");
+        };
+        var noRadioTelemetry=new TelemetrySnapshot();
+        using(var editor=new G9ScreenEditor(delegate{},manualSend,null,projectFile,false,liveFrameSender:guardedSend)){
+            editor.AllowDevice(true);
+            await editor.ResumeDisplay();
+            await editor.CheckRadioRestore(noRadioTelemetry,false);
+            Check(unguarded==0&&guarded==0,"automatic radio startup waits for input to pause");
+            await editor.CheckRadioRestore(noRadioTelemetry,true);
+            await editor.CheckRadioRestore(noRadioTelemetry,false);
+            Check(guarded==1,"desktop input interrupt defers the startup replay");
+            await editor.CheckRadioRestore(noRadioTelemetry,true);
+            await editor.CheckRadioRestore(noRadioTelemetry,true);
+            Check(unguarded==0&&guarded==2&&!editor.IsLive,"static frame replays once through the guarded sender with no telemetry");
+            await editor.ResumeDisplay();editor.StopLive();
+            await editor.CheckRadioRestore(noRadioTelemetry,true);
+            Check(guarded==2,"explicit stop cancels queued replay");
+            await editor.ResumeDisplay();
+            Check(editor.SuspendDevice("USB selected"),"pending replay remains eligible after reconnect");
+            editor.AllowDevice();await editor.ResumeDisplay();
+            await editor.CheckRadioRestore(noRadioTelemetry,true);
+            Check(unguarded==1&&guarded==2,"pending radio replay does not survive a switch to USB");
+        }
     }
     static async Task RunRadioResume(string directory) {
         var returned = DateTimeOffset.UtcNow.AddSeconds(15);
@@ -93,31 +146,31 @@ internal static class ScreenBackgroundTests {
             editor.AcceptProjectJson(TextProject("SENT"));
             await editor.UploadCurrent();
             var settling=DateTimeOffset.UtcNow;
-            await editor.RestoreAfterRadioGap(new TelemetrySnapshot {
+            await editor.CheckRadioRestore(new TelemetrySnapshot {
                 SampledAt=settling,BatterySampledAt=settling,RadioBatteryResumedAt=settling
             },true);
             Check(guarded==0,"a return during OLED settling cannot trigger another transfer");
             editor.AcceptProjectJson(TextProject("UNSENT"));
-            await editor.RestoreAfterRadioGap(sample,false);
+            await editor.CheckRadioRestore(sample,false);
             sample.ReportedProfileId=2;
-            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.CheckRadioRestore(sample,true);
             sample.ReportedProfileId=1;
             sample.SampledAt=returned.AddSeconds(10);
-            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.CheckRadioRestore(sample,true);
             Check(manual==1&&guarded==0,"desktop activity, wrong profile and stale telemetry block replay");
             sample.BatterySampledAt=sample.SampledAt;
-            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.CheckRadioRestore(sample,true);
             Check(guarded==1&&!editor.IsLive,"input-deferred replay leaves static mode intact");
-            await editor.RestoreAfterRadioGap(sample,true);
-            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.CheckRadioRestore(sample,true);
+            await editor.CheckRadioRestore(sample,true);
             Check(manual==1&&guarded==2,"deferred replay retries and completes once per radio return");
             returned=returned.AddSeconds(20);
             sample.SampledAt=returned;sample.BatterySampledAt=returned;sample.RadioBatteryResumedAt=returned;
-            await editor.RestoreAfterRadioGap(sample,true);
-            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.CheckRadioRestore(sample,true);
+            await editor.CheckRadioRestore(sample,true);
             Check(guarded==3,"receiver error does not retrigger every timer tick");
             editor.SuspendDevice("USB selected");editor.AllowDevice();
-            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.CheckRadioRestore(sample,true);
             Check(guarded==3,"USB transport ignores radio return");
         }
     }

@@ -67,9 +67,9 @@ const supportsUpload = computed(
     isDesktop &&
     state.value.device.connected &&
     ((state.value.device.connection === "usb" &&
-      /\bOL[4-9AB]\b/.test(state.value.device.firmware)) ||
+      /\bOL[4-9ABDE]\b/.test(state.value.device.firmware)) ||
       (state.value.device.connection === "radio" &&
-        /\bOL[9AB]\b/.test(state.value.device.firmware) &&
+        /\bOL[9ABDE]\b/.test(state.value.device.firmware) &&
         state.value.device.profile === 1)),
 );
 function hydrate(screen: ScreenState) {
@@ -536,7 +536,7 @@ onDeactivated(closeLayerMenu);
     <p>
       {{
         t(
-          "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9, OLA или OLB и активный профиль 1. Текущая прошивка:",
+          "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1. Текущая прошивка:",
         )
       }}
       {{ firmwareName(state.device.firmware) || t("не определена")

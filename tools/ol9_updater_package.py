@@ -24,21 +24,25 @@ COPY_ADDRESS = 0x404E3D
 COPY_BEFORE = bytes.fromhex('5356ffb7ec000000e8d6a9140083c418')
 # memset immediately before this span returns destination in EAX. Keep the
 # rounded transfer length in EBX, but copy exactly the pinned resource bytes.
-COPY_AFTER = (b'\x68' + struct.pack('<I', RESOURCE_BYTES) + b'\x56\x50\xe8' +
-              struct.pack('<i', 0x54F820 - (COPY_ADDRESS + 12)) + b'\x83\xc4\x18\x90')
-assert len(COPY_BEFORE) == len(COPY_AFTER) == 16
-PATCHES = ((0x4033B9, bytes.fromhex('8b87dc000000'), bytes.fromhex('b80010020090')),
-           (COPY_ADDRESS, COPY_BEFORE, COPY_AFTER))
+def bounded_patches(resource_bytes):
+    assert 0x21000 < resource_bytes <= 0x22000
+    copy_after = (b'\x68' + struct.pack('<I', resource_bytes) + b'\x56\x50\xe8' +
+                  struct.pack('<i', 0x54F820 - (COPY_ADDRESS + 12)) + b'\x83\xc4\x18\x90')
+    assert len(COPY_BEFORE) == len(copy_after) == 16
+    return ((0x4033B9, bytes.fromhex('8b87dc000000'), bytes.fromhex('b80010020090')),
+            (COPY_ADDRESS, COPY_BEFORE, copy_after))
+
+PATCHES = bounded_patches(RESOURCE_BYTES)
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def patch_host(data):
+def patch_host(data, patches=PATCHES):
     pe = pefile.PE(data=data)
     result = bytearray(data)
-    for address, before, after in PATCHES:
+    for address, before, after in patches:
         offset = pe.get_offset_from_rva(address - pe.OPTIONAL_HEADER.ImageBase)
         assert bytes(result[offset:offset + len(before)]) == before, hex(address)
         result[offset:offset + len(before)] = after
@@ -63,6 +67,22 @@ def resource_section(pe):
     matches = [s for s in pe.sections if s.Name.rstrip(b'\0') == b'.rsrc']
     assert len(matches) == 1
     return matches[0]
+
+
+def normalize_resources(original, repacked):
+    """Copy only the repacked resource section and its two extent fields."""
+    before, after = pefile.PE(data=original), pefile.PE(data=repacked)
+    src, dst = resource_section(after), resource_section(before)
+    assert src.VirtualAddress == dst.VirtualAddress
+    assert src.SizeOfRawData <= dst.SizeOfRawData and src.Misc_VirtualSize <= dst.SizeOfRawData
+    assert ((src.Misc_VirtualSize + 4095) & ~4095) == ((dst.Misc_VirtualSize + 4095) & ~4095)
+    result = bytearray(original)
+    result[dst.PointerToRawData:dst.PointerToRawData + dst.SizeOfRawData] = b'\0' * dst.SizeOfRawData
+    result[dst.PointerToRawData:dst.PointerToRawData + src.SizeOfRawData] = repacked[src.PointerToRawData:src.PointerToRawData + src.SizeOfRawData]
+    struct.pack_into('<I', result, dst.get_file_offset() + 8, src.Misc_VirtualSize)
+    struct.pack_into('<I', result, before.OPTIONAL_HEADER.DATA_DIRECTORY[2].get_file_offset() + 4,
+                     after.OPTIONAL_HEADER.DATA_DIRECTORY[2].Size)
+    return bytes(result)
 
 
 def verify(original, packed, resource):
@@ -130,19 +150,7 @@ def package(resource_path):
         api.EndUpdateResourceW(handle, True)
         raise RuntimeError('UpdateResource failed: ' + str(ctypes.get_last_error()))
     assert api.EndUpdateResourceW(handle, False), ctypes.get_last_error()
-    repacked = target.read_bytes()
-    a, b = pefile.PE(data=original), pefile.PE(data=repacked)
-    src, dst = resource_section(b), resource_section(a)
-    assert src.VirtualAddress == dst.VirtualAddress
-    assert src.SizeOfRawData <= dst.SizeOfRawData and src.Misc_VirtualSize <= dst.SizeOfRawData
-    assert ((src.Misc_VirtualSize + 4095) & ~4095) == ((dst.Misc_VirtualSize + 4095) & ~4095)
-    result = bytearray(original)
-    result[dst.PointerToRawData:dst.PointerToRawData + dst.SizeOfRawData] = b'\0' * dst.SizeOfRawData
-    result[dst.PointerToRawData:dst.PointerToRawData + src.SizeOfRawData] = repacked[src.PointerToRawData:src.PointerToRawData + src.SizeOfRawData]
-    struct.pack_into('<I', result, dst.get_file_offset() + 8, src.Misc_VirtualSize)
-    struct.pack_into('<I', result, a.OPTIONAL_HEADER.DATA_DIRECTORY[2].get_file_offset() + 4,
-                     b.OPTIONAL_HEADER.DATA_DIRECTORY[2].Size)
-    packed = patch_host(bytes(result))
+    packed = patch_host(normalize_resources(original, target.read_bytes()))
     report = verify(original, packed, resource)
     target.write_bytes(packed)
     assert matches[0].read_bytes() == original

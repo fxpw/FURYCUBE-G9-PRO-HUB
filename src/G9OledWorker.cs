@@ -16,14 +16,14 @@ internal sealed class G9OledWorker : IDisposable {
     readonly int timeoutMilliseconds;
     bool ready,disposed;
     bool framePending,statusPending,statusDataReceived;
-    bool pendingLive,lastFrameDeferred;
+    bool pendingLive,pendingPartial,lastFrameDeferred;
     int sent,acknowledged;
-    int deferredFrames;
+    int unsentFrames;
     int statusSent,statusAcknowledged;
     OledRuntimeStatus pendingStatus,completedStatus;
     string error;
     internal int ProcessId {get;private set;}
-    internal int FramesSubmitted {get{lock(state)return sent-deferredFrames;}}
+    internal int FramesSubmitted {get{lock(state)return sent-unsentFrames;}}
     internal int StatusQueriesSubmitted {get{lock(state)return statusSent;}}
     internal bool IsStopped {get{int code;return TryExited(out code);}}
     static ProcessStartInfo StartInfo(string root){return new ProcessStartInfo {FileName=Path.Combine(root,"bin","G9Device.exe"),Arguments="oled-stream",WorkingDirectory=root};}
@@ -66,15 +66,17 @@ internal sealed class G9OledWorker : IDisposable {
                 if(ready){error="Повторное приветствие вспомогательного процесса OLED.";invalid=true;}else ready=true;
             }else if(line.StartsWith("OLED_FRAME_",StringComparison.Ordinal)){
                 bool deferred=line.StartsWith(OledStreamCommand.Deferred,StringComparison.Ordinal);
-                string prefix=deferred?OledStreamCommand.Deferred:OledStreamCommand.Sent;
+                bool unchanged=line.StartsWith(OledStreamCommand.Unchanged,StringComparison.Ordinal);
+                string prefix=deferred?OledStreamCommand.Deferred:unchanged?OledStreamCommand.Unchanged:OledStreamCommand.Sent;
                 int index;
                 if(!line.StartsWith(prefix,StringComparison.Ordinal)||
                     !Int32.TryParse(line.Substring(prefix.Length),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out index)||
-                    !ready||!framePending||statusPending||index!=acknowledged+1||index!=sent||(deferred&&!pendingLive)){
+                    !ready||!framePending||statusPending||index!=acknowledged+1||index!=sent||
+                    (deferred&&!pendingLive)||(unchanged&&!pendingPartial)){
                     error="Неверное подтверждение передачи OLED.";invalid=true;
                 }else{
                     acknowledged=index;framePending=false;lastFrameDeferred=deferred;
-                    if(deferred)deferredFrames++;
+                    if(deferred||unchanged)unsentFrames++;
                 }
             }else if(line.StartsWith("OLED_STATUS_",StringComparison.Ordinal)){
                 try{
@@ -107,7 +109,7 @@ internal sealed class G9OledWorker : IDisposable {
         if(!line.StartsWith("OLED_SEND ",StringComparison.Ordinal)&&!line.StartsWith("OLED_FRAME_",StringComparison.Ordinal)&&!line.StartsWith("OLED_STATUS_",StringComparison.Ordinal))SafeLog(line);
     }
     string FailureText(string problem){int code;return TryExited(out code)&&code==4?
-        "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA или OLB и активный профиль 1.":problem;}
+        "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1.":problem;}
     enum Completion { Ready, Frame, Status }
     void WaitFor(Completion completion,int index){
         var watch=Stopwatch.StartNew();
@@ -120,14 +122,16 @@ internal sealed class G9OledWorker : IDisposable {
             changed.WaitOne(Math.Min(remaining,200));
         }
     }
-    internal bool Send(byte[] pixels,bool live=false){
+    internal bool Send(byte[] pixels,bool live=false,bool partial=false){
+        if(partial&&!live)throw new ArgumentException("Partial OLED updates require live mode.");
         OledProtocol.ValidateFrame(pixels);byte[] snapshot=(byte[])pixels.Clone();
         lock(sendGate){
             try{
                 WaitFor(Completion.Ready,0);int frame;
                 lock(inputGate){
-                    lock(state){if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);frame=++sent;framePending=true;pendingLive=live;}
-                    input.WriteLine((live?OledStreamCommand.Live:OledStreamCommand.Frame)+Convert.ToBase64String(snapshot));input.Flush();
+                    lock(state){if(disposed)throw new ObjectDisposedException("OLED session");if(error!=null)throw new InvalidOperationException(error);frame=++sent;framePending=true;pendingLive=live;pendingPartial=partial;}
+                    string command=partial?OledStreamCommand.LiveDelta:live?OledStreamCommand.Live:OledStreamCommand.Frame;
+                    input.WriteLine(command+Convert.ToBase64String(snapshot));input.Flush();
                 }
                 WaitFor(Completion.Frame,frame);
                 lock(state)return !lastFrameDeferred;

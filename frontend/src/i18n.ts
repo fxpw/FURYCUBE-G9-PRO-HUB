@@ -99,8 +99,8 @@ export const english: Record<string, string> = {
   "Загрузка CPU": "CPU usage",
   "Загрузка GPU": "GPU usage",
   "Загрузка RAM": "RAM usage",
-  "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9, OLA или OLB и активный профиль 1. Текущая прошивка:":
-    "OLED over USB requires OL4 or later. 2.4G requires OL9, OLA or OLB and active profile 1. Current firmware:",
+  "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1. Текущая прошивка:":
+    "OLED over USB requires OL4 or later. 2.4G requires OL9, OLA, OLB, OLD or OLE and active profile 1. Current firmware:",
   "Заданное количество": "Repeat count",
   "Закрыть уведомление": "Dismiss notification",
   "Заменить изображение": "Replace image",
@@ -190,6 +190,8 @@ export const english: Record<string, string> = {
   "Обновляется…": "Updating…",
   "Обновлять в реальном времени": "Update live",
   "Обновление OLED по 2.4G ждёт паузы во вводе.": "2.4 GHz OLED updates resume when input is idle.",
+  "Обновление OLED по 2.4G ожидает завершения передачи.": "Waiting for the 2.4 GHz OLED update to finish.",
+  "Передаю кадр OLED…": "Sending OLED frame…",
   "Ожидание устройства": "Waiting for device",
   "Окно закрыто": "Window closed",
   "Оставьте хотя бы один уровень DPI": "Keep at least one DPI stage enabled",
@@ -507,12 +509,12 @@ export function oledStatus(value: string): string {
   if (locale.value !== "en") return value;
   const phrases: [string, string][] = [
     [
-      "OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA или OLB на профиле 1. Живые данные обновляются, пока HUB открыт.",
-      "OLED supports USB with OL4 or later and 2.4G with OL9, OLA or OLB on profile 1. Live data updates while the HUB runs.",
+      "OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA, OLB, OLD или OLE на профиле 1. Живые данные обновляются, пока HUB открыт.",
+      "OLED supports USB with OL4 or later and 2.4G with OL9, OLA, OLB, OLD or OLE on profile 1. Live data updates while the HUB runs.",
     ],
     [
-      "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA или OLB и активный профиль 1.",
-      "Check OLED compatibility. USB requires OL4 or later. 2.4G requires OL9, OLA or OLB and active profile 1.",
+      "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1.",
+      "Check OLED compatibility. USB requires OL4 or later. 2.4G requires OL9, OLA, OLB, OLD or OLE and active profile 1.",
     ],
     ["Передача остановлена:", "Upload stopped:"],
     [

@@ -305,8 +305,13 @@ internal sealed partial class G9Hub : Form {
         assignments.Controls.Add(mousePages);
         var mouse = new TabPage("Устройство и прошивка") { Padding=new Padding(8) };
         mouse.Controls.Add(log); mouse.Controls.Add(buttons); mouse.Controls.Add(status); mouse.Controls.Add(description);
+        string trialLayout=Environment.GetEnvironmentVariable("G9_HUB_PARTIAL_OLED")=="1" ||
+            Environment.GetEnvironmentVariable("G9_HUB_OLED_ACK")=="1"
+            ? Environment.GetEnvironmentVariable("G9_HUB_OLED_TEST_LAYOUT") : null;
         screenEditor=new G9ScreenEditor(Append,pixels=>SendFrame(pixels,false),ReadRuntimeStatus,
-            cachedRadioDpiReader:ReadCachedRadioDpi,liveFrameSender:pixels=>SendFrame(pixels,true));
+            savedEditorFile:String.IsNullOrEmpty(trialLayout)?null:trialLayout,
+            cachedRadioDpiReader:ReadCachedRadioDpi,liveFrameSender:pixels=>SendFrame(pixels,true),
+            liveDeltaSender:pixels=>SendFrame(pixels,true,partial:true));
         screenEditor.SuspendDevice("Чтение подключённой мыши… OLED пока приостановлен.");
         var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(screenEditor);
         tabs.TabPages.Add(assignments); tabs.TabPages.Add(screen); tabs.TabPages.Add(mouse); tabs.SelectedIndex=0; Controls.Add(tabs);
@@ -461,7 +466,7 @@ internal sealed partial class G9Hub : Form {
             return RunDeviceProcess(action);
         }
     }
-    Task<string> SendFrame(byte[] pixels,bool live) {
+    Task<string> SendFrame(byte[] pixels,bool live,bool partial=false) {
         Furycube.G9.Oled.OledProtocol.ValidateFrame(pixels);
         int generation=deviceGeneration;
         string identity=selectedIdentity;
@@ -472,11 +477,12 @@ internal sealed partial class G9Hub : Form {
                 G9OledWorker current=oledWorker;
                 try {
                     if(current==null) {
+                        if(partial&&!Furycube.G9.Oled.RadioOledInputPriority.IsDesktopIdle())return null;
                         current=CreateOledWorker(identity);
                         System.Threading.Interlocked.Exchange(ref oledWorker,current);
                         if(closing || generation!=deviceGeneration)throw new OperationCanceledException("Подключение OLED изменилось.");
                     }
-                    if(!current.Send(pixels,live))return null;
+                    if(!current.Send(pixels,live,partial))return null;
                     return "Кадров отправлено: " + current.FramesSubmitted + " · " + DateTime.Now.ToString("HH:mm:ss");
                 } catch {
                     if(current!=null) {
@@ -555,7 +561,7 @@ internal sealed partial class G9Hub : Form {
                 throw new TimeoutException("Мышь не завершила операцию за " + (timeout/1000) + " секунд. Перечитайте её настройки.");
             }
             process.WaitForExit();
-            if (process.ExitCode == 4) throw new InvalidOperationException("Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA или OLB и активный профиль 1.");
+            if (process.ExitCode == 4) throw new InvalidOperationException("Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1.");
             if (process.ExitCode != 0) throw new InvalidOperationException(errors.Length > 0 ? errors.ToString().Trim() : "G9Device завершил операцию с ошибкой; подробности в журнале.");
             success = true;
             return output.ToString();

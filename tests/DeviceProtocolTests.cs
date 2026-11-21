@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using Furycube.G9.Oled;
 
 internal static class DeviceProtocolTests {
     static int count;
@@ -143,6 +145,49 @@ internal static class DeviceProtocolTests {
         Reject(delegate{G9Wire.ValidateSend(carrier9);},"checksum-compatible carrier still cannot pass settings allowlist");
         Reject(delegate{G9Wire.ConfigurationSendBuffer(0xFA60,134,carrier9);},"configuration padding does not admit reserved OL9 carrier");
         Reject(delegate{G9Wire.Ol9RadioCarrier(Change(oledChunk,62,0));},"OL9 refuses malformed source GO4");
+        var deltaFirmware = OledProtocol.DecodeFirmwareCapabilities(Hex("0b080101084f4c41"));
+        var shortWaitFirmware = OledProtocol.DecodeFirmwareCapabilities(Hex("0b080101084f4c42"));
+        var ol9Firmware = OledProtocol.DecodeFirmwareCapabilities(Hex("0b080101084f4c39"));
+        Pass(deltaFirmware.SupportsRadioDeltas && deltaFirmware.SupportsRadioWrites &&
+            deltaFirmware.SupportsShortWrites && shortWaitFirmware.SupportsRadioDeltas &&
+            shortWaitFirmware.SupportsRadioWrites && shortWaitFirmware.SupportsShortWrites &&
+            !ol9Firmware.SupportsRadioDeltas, "OLA and OLB advertise identical radio delta capabilities");
+        Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(Hex("0b080101084f4c43")); }, "unrecognized radio firmware stays disabled");
+        var baseline = new byte[480];
+        var replacement = new byte[480];
+        replacement[0] = 0xA9;
+        replacement[1] = 0x5C;
+        replacement[479] = 8;
+        var expectedDelta = new byte[40];
+        byte[] deltaPrefix = Hex("8dc3bafbdf81421b020002a95cdf0108");
+        Buffer.BlockCopy(deltaPrefix, 0, expectedDelta, 0, deltaPrefix.Length);
+        byte[] delta = OledRadioDelta.Encode(baseline, replacement);
+        Pass(G9Wire.Equal(delta, expectedDelta), "delta matches independent CRC32 and run encoding");
+        Pass(OledRadioDelta.Encode(baseline, baseline).Length == 0, "identical frame has no delta");
+        var dense = new byte[480];
+        for (int i = 0; i < 29; i++) dense[i] = 1;
+        Pass(OledRadioDelta.Encode(baseline, dense).Length == 40, "delta with exactly 40 bytes fits");
+        dense[29] = 1;
+        Pass(OledRadioDelta.Encode(baseline, dense) == null, "larger change needs full upload");
+        var sparse = new byte[480];
+        for (int i = 0; i < 29; i += 2) sparse[360 + i] = 1;
+        byte[] compact = OledRadioDelta.Encode(baseline, sparse);
+        Pass(compact != null && compact[8] == 1 &&
+            (compact[9] | compact[10] << 8) == (360 | (28 << 9)) &&
+            G9Wire.Equal(compact.Skip(11).ToArray(), sparse.Skip(360).Take(29).ToArray()),
+            "bridge single-byte gaps so a formerly oversized sparse delta fits exactly");
+        var separate = new byte[480];
+        separate[476] = separate[479] = 1;
+        byte[] separateDelta = OledRadioDelta.Encode(baseline, separate);
+        Pass(separateDelta[8] == 2 && (separateDelta[9] | separateDelta[10] << 8) == 476 &&
+            (separateDelta[12] | separateDelta[13] << 8) == 479,
+            "keep separate runs across two unchanged bytes and handle a final-byte change");
+        Reject(delegate { OledRadioDelta.Encode(baseline, Change(replacement, 479, 0x80)); }, "delta rejects hidden pixels");
+        byte[] radioDelta = G9Wire.RadioDeltaCarrier(134, delta);
+        Pass(radioDelta.Length == 56 && radioDelta[6] == 0xFE && radioDelta[24] == 0 && radioDelta[55] == 9,
+            "delta carrier is distinct and remains invalid as sensor settings");
+        Reject(delegate { G9Wire.ConfigurationSendBuffer(0xFA60, 134, radioDelta); }, "delta stays out of settings allowlist");
+        Reject(delegate { G9Wire.RadioDeltaCarrier(64, delta); }, "delta requires the receiver's exact feature capacity");
         Reject(delegate{G9Wire.ValidateOl6RadioIdentity(0xFA60,134,Hex("0b080101084f4c35"),profileOne);},"OL5 cannot receive reserved carrier");
         Reject(delegate{G9Wire.ValidateOl6RadioIdentity(0x2148,262,ol6,profileOne);},"carrier cannot use USB mouse path");
         Reject(delegate{G9Wire.ValidateOl6RadioIdentity(0xFA60,64,ol6,profileOne);},"carrier requires qualified receiver feature capacity");

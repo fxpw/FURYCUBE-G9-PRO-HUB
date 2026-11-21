@@ -11,11 +11,17 @@ using Furycube.G9.Telemetry;
 internal sealed class G9TelemetryReader : IDisposable
 {
     readonly object gate = new object();
+    readonly Action<ushort, byte[]> observeReport;
     bool started, disposed;
     InputSession session;
     TelemetryCache cache;
     string lastError, devicePath;
     ushort productId;
+
+    internal G9TelemetryReader(Action<ushort, byte[]> observeReport = null)
+    {
+        this.observeReport = observeReport;
+    }
 
     internal TelemetrySnapshot Snapshot
     {
@@ -42,16 +48,28 @@ internal sealed class G9TelemetryReader : IDisposable
             if (started) return;
             started = true;
         }
-        ThreadPool.QueueUserWorkItem(delegate { Initialize(); });
+        ThreadPool.QueueUserWorkItem(delegate { Initialize(false); });
     }
 
-    void Initialize()
+    internal void StartReceiver()
+    {
+        lock (gate)
+        {
+            if (disposed) throw new ObjectDisposedException("G9TelemetryReader");
+            if (started) throw new InvalidOperationException("G9 passive input reader was already started.");
+            started = true;
+        }
+        Initialize(true);
+        if (ProductId != 0xFA60) throw new InvalidOperationException(LastError ?? "G9 passive receiver input is unavailable.");
+    }
+
+    void Initialize(bool receiverOnly)
     {
         InputSession opened = null;
         try
         {
             lock (gate) { if (disposed) return; }
-            string selected = SelectPath(Native.EnumeratePaths());
+            string selected = SelectPath(Native.EnumeratePaths(), receiverOnly);
             if (selected == null) return;
             opened = InputSession.Open(selected, Accept, Failed);
             lock (gate)
@@ -77,6 +95,7 @@ internal sealed class G9TelemetryReader : IDisposable
         {
             if (disposed || cache == null) return;
             cache.AcceptInput(path, 0x1D57, pid, 0xA, 0, report, DateTimeOffset.UtcNow);
+            if (observeReport != null) observeReport(pid, report);
         }
     }
 
@@ -110,14 +129,14 @@ internal sealed class G9TelemetryReader : IDisposable
 
     // Pure selection helper, also exercised by offline tests. Filter before
     // opening anything: keyboard/mouse/consumer/feature collections are excluded.
-    internal static string SelectPath(IEnumerable<string> paths)
+    internal static string SelectPath(IEnumerable<string> paths, bool receiverOnly = false)
     {
         var wired = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var receiver = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (string path in paths)
         {
             if (String.IsNullOrEmpty(path)) continue;
-            if (path.IndexOf("vid_1d57&pid_2148&mi_02&col03#", StringComparison.OrdinalIgnoreCase) >= 0) wired.Add(path);
+            if (!receiverOnly && path.IndexOf("vid_1d57&pid_2148&mi_02&col03#", StringComparison.OrdinalIgnoreCase) >= 0) wired.Add(path);
             else if (path.IndexOf("vid_1d57&pid_fa60&mi_02&col03#", StringComparison.OrdinalIgnoreCase) >= 0) receiver.Add(path);
         }
         if (wired.Count > 1) throw new InvalidOperationException("Multiple wired G9 PRO input collections; telemetry is unavailable.");

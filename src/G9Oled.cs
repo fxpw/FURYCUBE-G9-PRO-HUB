@@ -8,12 +8,15 @@ namespace Furycube.G9.Oled {
     internal static class OledStreamCommand {
         internal const string Frame = "FRAME ";
         internal const string Live = "LIVE ";
+        internal const string LiveDelta = "LIVE_DELTA ";
         internal const string Sent = "OLED_FRAME_SENT ";
         internal const string Deferred = "OLED_FRAME_DEFERRED ";
+        internal const string Unchanged = "OLED_FRAME_UNCHANGED ";
     }
 
     internal static class RadioOledInputPriority {
         const int IdleMilliseconds = 900;
+        static readonly int[] MouseButtonKeys = { 0x01, 0x02, 0x04, 0x05, 0x06 };
 
         [StructLayout(LayoutKind.Sequential)]
         struct LastInputInfo {
@@ -25,11 +28,20 @@ namespace Furycube.G9.Oled {
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GetLastInputInfo(ref LastInputInfo info);
 
+        [DllImport("user32.dll")]
+        static extern short GetAsyncKeyState(int virtualKey);
+
+        internal static bool NoMouseButtonHeld() {
+            foreach (int key in MouseButtonKeys)
+                if ((GetAsyncKeyState(key) & 0x8000) != 0) return false;
+            return true;
+        }
+
         internal static bool IsDesktopIdle() {
             var info = new LastInputInfo { Size = (uint)Marshal.SizeOf(typeof(LastInputInfo)) };
             if (!GetLastInputInfo(ref info)) return false;
             int elapsed = unchecked(Environment.TickCount - (int)info.Tick);
-            return elapsed >= IdleMilliseconds;
+            return elapsed >= IdleMilliseconds && NoMouseButtonHeld();
         }
     }
 
@@ -44,7 +56,10 @@ namespace Furycube.G9.Oled {
         public string Extension { get; private set; }
         public bool SupportsRuntimeStatus { get { return Extension == "OL3" || SupportsShortWrites; } }
         public bool SupportsShortWrites { get { return Extension[2] >= '4'; } }
-        public bool SupportsRadioWrites { get { return Extension == "OL9" || Extension == "OLA" || Extension == "OLB"; } }
+        public bool SupportsRadioWrites { get { return Extension == "OL9" || SupportsRadioDeltas; } }
+        public bool SupportsRadioDeltas { get { return Extension == "OLA" || Extension == "OLB" || SupportsRadioReceipts; } }
+        internal bool SupportsRadioReceipts { get { return Extension == "OLD" || SupportsRadioDeltaReplay; } }
+        internal bool SupportsRadioDeltaReplay { get { return Extension == "OLE"; } }
         internal FirmwareCapabilities(byte major, byte minor, string extension) { VersionMajor = major; VersionMinor = minor; Extension = extension; }
     }
 
@@ -64,7 +79,8 @@ namespace Furycube.G9.Oled {
             Require(reply != null && reply.Length == 8 && reply[0] == 0x0B && (reply[1] == 5 || reply[1] == 8) && reply[2] == 1,
                 "Unexpected firmware-version response; OLED writes are disabled");
             Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' &&
-                ((reply[7] >= (byte)'2' && reply[7] <= (byte)'9') || reply[7] == (byte)'A' || reply[7] == (byte)'B'),
+                ((reply[7] >= (byte)'2' && reply[7] <= (byte)'9') || reply[7] == (byte)'A' || reply[7] == (byte)'B' ||
+                 reply[7] == (byte)'D' || reply[7] == (byte)'E'),
                 "Firmware does not advertise a supported OLED extension; OLED operations are disabled");
             Require((!expectedMajor.HasValue || reply[3] == expectedMajor.Value) && (!expectedMinor.HasValue || reply[4] == expectedMinor.Value),
                 "Firmware version does not match the supported OLED revision");
@@ -79,7 +95,7 @@ namespace Furycube.G9.Oled {
             ValidateDevice(vendor, product);
             if (capabilities == null) throw new InvalidOperationException("Verified OLED discovery is required");
             if (product == 0xFA60 && !capabilities.SupportsRadioWrites)
-                throw new NotSupportedException("OLED through the 2.4 GHz receiver requires OL9, OLA or OLB; no image or status report was sent");
+                throw new NotSupportedException("OLED through the 2.4 GHz receiver requires OL9, OLA, OLB, OLD or OLE; no image or status report was sent");
         }
 
         public static ushort Crc16CcittFalse(byte[] bytes, int offset, int length) {
@@ -174,6 +190,69 @@ namespace Furycube.G9.Oled {
         }
     }
 
+    internal static class OledRadioDelta {
+        internal const byte Page = 0xFE;
+        internal const int PayloadBytes = 40;
+
+        // A return value of null means the change needs a full frame.
+        // Identical frames produce an empty array and need no transfer.
+        internal static byte[] Encode(byte[] previous, byte[] next) {
+            byte[] actual;
+            return Encode(previous, next, false, out actual);
+        }
+
+        // Keep the confirmed base and apply the changes that fit one packet.
+        internal static byte[] EncodeStep(byte[] previous, byte[] next, out byte[] actual) {
+            return Encode(previous, next, true, out actual);
+        }
+
+        static byte[] Encode(byte[] previous, byte[] next, bool allowStep, out byte[] actual) {
+            OledProtocol.ValidateFrame(previous);
+            OledProtocol.ValidateFrame(next);
+            actual = allowStep ? (byte[])previous.Clone() : next;
+            var payload = new byte[PayloadBytes];
+            int cursor = 9;
+            for (int index = 0; index < next.Length;) {
+                if (previous[index] == next[index]) {
+                    index++;
+                    continue;
+                }
+                int start = index;
+                // One unchanged byte costs less than starting a second two-byte descriptor.
+                do { index++; }
+                while (index < next.Length && (previous[index] != next[index] ||
+                    (index + 1 < next.Length && previous[index + 1] != next[index + 1])));
+                int length = index - start;
+                int room = payload.Length - cursor - 2;
+                if (!allowStep && length > room) return null;
+                if (room <= 0) break;
+                length = Math.Min(length, room);
+                int descriptor = start | ((length - 1) << 9);
+                payload[cursor++] = (byte)descriptor;
+                payload[cursor++] = (byte)(descriptor >> 8);
+                Buffer.BlockCopy(next, start, payload, cursor, length);
+                if (allowStep) Buffer.BlockCopy(next, start, actual, start, length);
+                cursor += length;
+                payload[8]++;
+            }
+            if (payload[8] == 0) return new byte[0];
+            WriteCrc(payload, 0, previous);
+            WriteCrc(payload, 4, actual);
+            return payload;
+        }
+
+        static void WriteCrc(byte[] output, int offset, byte[] bytes) {
+            uint crc = 0xFFFFFFFFu;
+            foreach (byte value in bytes) {
+                crc ^= value;
+                for (int bit = 0; bit < 8; bit++)
+                    crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xEDB88320u : 0u);
+            }
+            crc ^= 0xFFFFFFFFu;
+            for (int i = 0; i < 4; i++) output[offset + i] = (byte)(crc >> (8 * i));
+        }
+    }
+
     // The caller owns the native HID connection, timeout and session lock. This assembly never opens HID.
     public interface IOledTransport {
         ushort VendorId { get; }
@@ -191,6 +270,13 @@ namespace Furycube.G9.Oled {
     }
     public sealed class OledSender {
         readonly object gate = new object(); readonly IOledTransport transport; readonly Action<int> wait; FirmwareCapabilities capabilities; bool displayInitialized; ushort discoveredProduct;
+        internal sealed class RadioRefresh {
+            internal readonly byte[] Pixels;
+            internal readonly byte[][] Reports;
+            internal int Next;
+            internal bool Complete { get { return Next == Reports.Length; } }
+            internal RadioRefresh(byte[] pixels, byte[][] reports) { Pixels = pixels; Reports = reports; }
+        }
         public OledSender(IOledTransport connection, Action<int> delay = null) {
             if (connection == null) throw new ArgumentNullException("connection"); transport = connection; wait = delay ?? new Action<int>(Thread.Sleep);
         }
@@ -229,7 +315,31 @@ namespace Furycube.G9.Oled {
         }
         public OledTransferResult WriteFrame(byte[] pixels) { return WriteFrame(pixels, null); }
 
-        internal OledTransferResult WriteFrame(byte[] pixels, Func<bool> canSendRadioFragment) {
+        internal RadioRefresh PrepareRadioRefresh(byte[] pixels) {
+            lock(gate) {
+                ValidateIdentity();
+                if(capabilities==null || discoveredProduct!=0xFA60 || capabilities.Extension!="OLB")
+                    throw new InvalidOperationException("Staged radio refresh requires OLB on the current session.");
+                return new RadioRefresh(pixels,OledShortProtocol.BuildFrameReports(pixels,!displayInitialized));
+            }
+        }
+
+        internal bool WriteRadioRefreshFragment(RadioRefresh refresh, Func<bool> desktopIdle) {
+            lock(gate) {
+                ValidateIdentity();
+                if(capabilities==null || refresh.Complete)
+                    throw new InvalidOperationException("No staged radio refresh is pending.");
+                if(!desktopIdle())return false;
+                try {transport.SendFeature(refresh.Reports[refresh.Next]);}
+                catch {capabilities=null;displayInitialized=false;throw;}
+                refresh.Next++;
+                if(refresh.Complete)displayInitialized=true;
+                return true;
+            }
+        }
+
+        internal OledTransferResult WriteFrame(byte[] pixels, Func<bool> canSendRadioFragment,
+            Action beforeLastReport = null, int? radioFragmentDelay = null) {
             lock (gate) {
                 ValidateIdentity();
                 if (capabilities == null) throw new InvalidOperationException("Verified OLED discovery is required before any OLED feature report");
@@ -238,13 +348,14 @@ namespace Furycube.G9.Oled {
                     OledProtocol.BuildFrameReports(pixels, !displayInitialized); int sent = 0;
                 bool radio = discoveredProduct == 0xFA60;
                 int fragmentDelay = 25;
-                if (radio) fragmentDelay = canSendRadioFragment != null ? 250 : 500;
+                if (radio) fragmentDelay = radioFragmentDelay ?? (canSendRadioFragment != null ? 250 : 500);
                 try {
                     foreach (byte[] report in reports) {
                         ValidateIdentity();
                         // A later first fragment resets the firmware's staged frame.
                         if (radio && canSendRadioFragment != null && !canSendRadioFragment())
                             return new OledTransferResult(sent, true);
+                        if (sent == reports.Length - 1 && beforeLastReport != null) beforeLastReport();
                         transport.SendFeature(report); sent++;
                         // Keep the receiver gap after the last fragment too.
                         if (radio || sent < reports.Length) wait(fragmentDelay);

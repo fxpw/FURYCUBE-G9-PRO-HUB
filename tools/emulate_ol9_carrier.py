@@ -118,7 +118,8 @@ def run_checks(code, layout, candidate_image=None, include_settings=True):
     readiness_checks = run_mouse_ready_regressions(code, guard_layout,candidate_image,protected_reports=(4,5,6,8,12,0x22))
     # Adapt only expected Python marker/symbol names; candidate ARM stays exact.
     scope=dict(run_claim_irq_regressions.__globals__)
-    source=inspect.getsource(run_claim_irq_regressions).replace('4f4c34','4f4c39').replace('g9_ol4_','g9_ol9_')
+    marker = layout['version_report_marker'].encode('ascii').hex()
+    source=inspect.getsource(run_claim_irq_regressions).replace('4f4c34',marker).replace('g9_ol4_','g9_ol9_')
     exec(source,scope)
     irq_checks=scope['run_claim_irq_regressions'](code,layout,candidate_image)
     f = fixture()

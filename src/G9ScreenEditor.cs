@@ -47,6 +47,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
     readonly Action<string> report;
     readonly Func<byte[],Task<string>> sendFrame;
     readonly Func<byte[],Task<string>> sendLiveFrame;
+    readonly Func<byte[],Task<string>> sendLiveDeltaFrame;
     readonly Func<Task<OledRuntimeStatus>> readRuntimeStatus;
     readonly Func<TelemetrySnapshot,int?> readCachedRadioDpi;
     OledRuntimeStatus runtimeStatus;
@@ -56,13 +57,13 @@ internal sealed partial class G9ScreenEditor : UserControl {
     bool transportAvailable=true;
     bool radioTransport;
     int transportEpoch,uploadSerial;
-    string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA или OLB на профиле 1. Живые данные обновляются, пока HUB открыт.";
+    string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA, OLB, OLD или OLE на профиле 1. Живые данные обновляются, пока HUB открыт.";
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
     readonly TabControl editingTabs=new TabControl {Dock=DockStyle.Fill};
     readonly string autosaveFile;
     readonly string resumeFrameFile;
     OledResumeCache resumeFrame=new OledResumeCache();
-    bool displayOwnedThisRun,resumeFrameInvalid;
+    bool displayOwnedThisRun,resumeFrameInvalid,pendingStaticRadioResume,forceFullRadioRefresh;
     DateTimeOffset? handledRadioResume;
     DateTimeOffset radioTransferStarted,radioTransferSettled;
     bool syncing,sampling,syncingGeometry,dragging,dirty,disposedEditor;
@@ -87,8 +88,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
         internal GeometrySlider(string value){title=value;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
         internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+" px";}
     }
-    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null,Func<byte[],Task<string>> liveFrameSender=null){
-        report=logger;sendFrame=frameSender;sendLiveFrame=liveFrameSender;readRuntimeStatus=runtimeStatusReader;readCachedRadioDpi=cachedRadioDpiReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
+    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null,Func<byte[],Task<string>> liveFrameSender=null,Func<byte[],Task<string>> liveDeltaSender=null){
+        report=logger;sendFrame=frameSender;sendLiveFrame=liveFrameSender;sendLiveDeltaFrame=liveDeltaSender;readRuntimeStatus=runtimeStatusReader;readCachedRadioDpi=cachedRadioDpiReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
         backgroundServicesEnabled=backgroundServices;
         autosaveFile=savedEditorFile??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
         resumeFrameFile=autosaveFile+".last-frame";
@@ -174,7 +175,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         timer.Tick+=async delegate {
             await RefreshSensors();
             if(IsDisposed||disposedEditor)return;
-            if(radioTransport)await RestoreAfterRadioGap(telemetry.Snapshot,RadioOledInputPriority.IsDesktopIdle());
+            if(radioTransport)await CheckRadioRestore(telemetry.Snapshot,RadioOledInputPriority.IsDesktopIdle());
             if(live.Checked)await UploadFrame(background:true,quiet:true);
         };
         autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
@@ -307,16 +308,18 @@ internal sealed partial class G9ScreenEditor : UserControl {
     }
     const string WaitingForInputIdle="Обновление OLED по 2.4G ждёт паузы во вводе.";
     async Task UploadFrame(bool background=false,bool quiet=false){
-        if(uploading||sendFrame==null||!transportAvailable)return;Render();if(current==null)return;
+        if(uploading||sendFrame==null||!transportAvailable)return;
+        pendingStaticRadioResume=false;Render();if(current==null)return;
         int epoch=transportEpoch,operation=++uploadSerial;
         if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";Render();return;}
         bool prioritizeInput=background&&radioTransport&&sendLiveFrame!=null;
-        if(prioritizeInput&&!RadioOledInputPriority.IsDesktopIdle()){
+        bool usePartial=prioritizeInput&&sendLiveDeltaFrame!=null&&!forceFullRadioRefresh;
+        if(prioritizeInput&&!usePartial&&!RadioOledInputPriority.IsDesktopIdle()){
             lastUploadError=null;oledNote=WaitingForInputIdle;Render();return;
         }
         var radioResumeAtStart=radioTransport?telemetry.Snapshot.RadioBatteryResumedAt:null;
         if(radioTransport)radioTransferStarted=DateTimeOffset.UtcNow;
-        lastUploadError=null;uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
+        lastUploadError=null;uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Передаю кадр OLED…";Render();
         try{
             // Radio rendering uses the checked settings snapshot and passive
             // notifications to avoid competing with mouse input.
@@ -328,9 +331,11 @@ internal sealed partial class G9ScreenEditor : UserControl {
             if(project.Width!=120||project.Height!=28){live.Checked=false;oledNote="G9 PRO принимает кадр 120 × 28. Откройте макет этого размера.";return;}
             Render();if(current==null){live.Checked=false;return;}
             byte[] pixels=(byte[])current.Buffer.Clone();
-            string sent=await (prioritizeInput?sendLiveFrame:sendFrame)(pixels);
+            var sender=usePartial?sendLiveDeltaFrame:prioritizeInput?sendLiveFrame:sendFrame;
+            string sent=await sender(pixels);
             if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;
-            if(prioritizeInput&&sent==null){oledNote=WaitingForInputIdle;return;}
+            if(prioritizeInput&&sent==null){oledNote=usePartial?"Обновление OLED по 2.4G ожидает завершения передачи.":WaitingForInputIdle;return;}
+            if(!usePartial)forceFullRadioRefresh=false;
             oledNote=sent;
             resumeFrame.Remember(pixels,live.Checked);resumeFrameInvalid=false;displayOwnedThisRun=true;SaveResumeFrame();
             MarkRadioResume(radioResumeAtStart);
@@ -357,11 +362,12 @@ internal sealed partial class G9ScreenEditor : UserControl {
     }
     internal object BackgroundState() {return new {live=live.Checked,available=transportAvailable,uploading=uploading,status=oledNote};}
     internal Task UploadCurrent() {return UploadFrame();}
-    internal void StopLive() {live.Checked=false;transportEpoch++;uploadSerial++;uploading=false;upload.Enabled=transportAvailable;oledNote="Автообновление OLED приостановлено.";Render();}
+    internal void StopLive() {live.Checked=false;transportEpoch++;uploadSerial++;uploading=false;pendingStaticRadioResume=false;upload.Enabled=transportAvailable;oledNote="Автообновление OLED приостановлено.";Render();}
     internal bool SuspendDevice(string reason) {
-        bool wasLive=live.Checked||displayOwnedThisRun;transportEpoch++;uploadSerial++;uploading=false;runtimeStatus=null;
+        bool wasLive=live.Checked||displayOwnedThisRun||pendingStaticRadioResume;transportEpoch++;uploadSerial++;uploading=false;pendingStaticRadioResume=false;runtimeStatus=null;
         telemetry.Dispose();telemetry=new G9TelemetryReader();
         handledRadioResume=null;
+        forceFullRadioRefresh=false;
         radioTransferStarted=radioTransferSettled=default(DateTimeOffset);
         transportAvailable=false;bool previous=syncing;syncing=true;try{live.Checked=false;}finally{syncing=previous;}live.Enabled=false;upload.Enabled=false;
         oledNote=reason;Render();return wasLive;
@@ -377,19 +383,30 @@ internal sealed partial class G9ScreenEditor : UserControl {
         if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null||uploading)return;
         if(resumeFrameInvalid){oledNote="Сохранённый кадр повреждён; отправьте макет вручную.";Render();return;}
         if(!resumeFrame.HasFrame||resumeFrame.Live){await ResumeLive();return;}
-        var radioResumeAtStart=radioTransport?telemetry.Snapshot.RadioBatteryResumedAt:null;
-        int epoch=transportEpoch;
+        if(radioTransport&&sendLiveFrame!=null){
+            pendingStaticRadioResume=true;oledNote=WaitingForInputIdle;Render();return;
+        }
         await RestoreSavedFrame(sendFrame);
-        if(epoch==transportEpoch)MarkRadioResume(radioResumeAtStart);
     }
     void MarkRadioResume(DateTimeOffset? resumedAt) {
         if(resumedAt.HasValue && (!handledRadioResume.HasValue || resumedAt>handledRadioResume))
             handledRadioResume=resumedAt;
     }
-    internal async Task RestoreAfterRadioGap(TelemetrySnapshot sample,bool desktopIdle) {
-        if(disposedEditor||IsDisposed||!radioTransport||!transportAvailable||sendLiveFrame==null||!sample.RadioBatteryResumedAt.HasValue)return;
+    internal async Task CheckRadioRestore(TelemetrySnapshot sample,bool desktopIdle) {
+        if(disposedEditor||IsDisposed||!radioTransport||!transportAvailable||sendLiveFrame==null)return;
+        if(pendingStaticRadioResume){
+            if(uploading||!desktopIdle)return;
+            int resumeEpoch=transportEpoch;
+            if(await RestoreSavedFrame(sendLiveFrame) && resumeEpoch==transportEpoch){
+                pendingStaticRadioResume=false;MarkRadioResume(sample.RadioBatteryResumedAt);
+            }
+            return;
+        }
+        if(!sample.RadioBatteryResumedAt.HasValue)return;
         var resumedAt=sample.RadioBatteryResumedAt.Value;
         if(handledRadioResume.HasValue&&resumedAt<=handledRadioResume.Value)return;
+        if(live.Checked&&sendLiveDeltaFrame!=null&&
+            (resumedAt<radioTransferStarted||resumedAt>radioTransferSettled))forceFullRadioRefresh=true;
         if(live.Checked||!displayOwnedThisRun||!resumeFrame.HasFrame||resumeFrame.Live){
             handledRadioResume=resumedAt;
             return;
