@@ -7,51 +7,43 @@ The interface supports **Russian and English**.
 
 ![Button assignments in the Vue interface](docs/images/hub-vue-en.png)
 
-*All screenshots show the current English Vue interface with sample data.
-They illustrate the UI, not hardware validation or a live device connection.*
+*Screenshots show the English Vue interface with sample data.*
 
 ## Current support
 
-This is an **unofficial, experimental project**. Hardware checks apply to one
-identified development mouse, not every device sold under the same name.
+This is an **unofficial, experimental project**. Hardware results apply to the
+[tested G9 PRO hardware revision](docs/HARDWARE-IDENTITY.md).
 
 | Feature | Current status |
 | --- | --- |
-| Onboard button assignments | The ordinary-key fix was confirmed over USB and 2.4 GHz with the HUB closed. Assignments use guarded writes and readback. |
-| DPI, sensor and power settings | Complete wired reads and a timer write/restore were physically checked. Other setters have offline coverage. |
-| Settings over 2.4 GHz | The updated Windows client read the profile, DPI, polling and buttons on DG4, and all six archived records matched the USB backup. Earlier OL4 polling writes passed CLI and Vue checks with restoration. Power timers and debounce require USB. See [radio settings](docs/RADIO-SETTINGS.md). |
-| Custom OLED on OL4 | USB frames, numeric DPI and live clock/system widgets were confirmed while ordinary mouse input continued working. |
-| OL5 OLED and retained last frame | An earlier build with working USB image upload. Radio upload failed and unplugging USB cleared the image on the development mouse. |
-| OL6 carrier experiment | Earlier installation introduced a separate experimental client. The owner confirmed radio input but reported missing USB mouse input. It was superseded by OL7 before any image upload. |
-| OL7 USB input guard | Earlier installed build. A single USB image and continued input were confirmed after Windows restart; the radio input check passed 9/9. Ordinary radio reads later timed out before an image could be sent. |
-| DG2 diagnostic control | Earlier installed without custom OLED support to compare the original radio path. Complete USB settings matched all 117 saved bytes; both USB and radio input passed 9/9. Radio version queries still timed out, including through the OEM library. See [DG1/DG2 controls](docs/DG1-DG2-CONTROLS.md). |
-| DG3 RF state display | Earlier diagnostic build: USB input recovered without a PC reboot after an approved Interception bypass and passed 9/9. Radio input also passed 9/9, but the version query timed out and the display showed 9000. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
-| DG4 last-request diagnostic | Previous diagnostic build. USB and radio input passed 9/9. A complete settings read passed over radio after the client adopted asynchronous I/O. See [DG4 diagnostic](docs/DG4-RADIO-DIAGNOSTIC.md). |
-| OL9 radio OLED | The same frame appeared over USB and over 2.4 GHz with 56-byte feature calls. Radio input passed 9/9 and the settings matched the USB backup. The HUB enables this path on active profile 1. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
-| PC-side last-frame resume | The HUB caches submitted frames with a checksum. Same-receiver replay of a static frame was confirmed after switching the development mouse off and back to 2.4 GHz. Restart and error handling also have simulated-transport coverage. |
+| Onboard button assignments | Assignments use guarded writes and readback. A keyboard assignment on the OLED button was confirmed over USB and 2.4 GHz with the HUB closed. |
+| DPI, sensor and power settings | Complete wired reads and a power timer write and restore were verified on hardware. |
+| Settings over 2.4 GHz | The HUB reads the profile, DPI, sensor, polling and button settings. Polling writes and restoration were verified on hardware. Power timers and debounce require USB. See [radio settings](docs/RADIO-SETTINGS.md). |
+| Custom OLED over USB | Images, numeric DPI and live clock and system widgets were verified on compatible firmware. |
+| Custom OLED over 2.4 GHz | Full-frame delivery was verified on OL9 with active profile 1. See the [firmware candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
+| PC-side last-frame resume | The HUB caches the last submitted frame with a checksum. A static frame was restored after switching the mouse off and back to 2.4 GHz with the same receiver. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
-| Firmware recovery | Configuration backups exist; a complete installed-firmware dump and independent rollback remain unverified. |
+| Firmware recovery | The HUB saves configuration backups. A complete firmware dump and independent recovery path remain unverified. |
 
-An earlier OLED session lost mouse input and required a Windows reboot. The
-708-byte OL4 extension included an endpoint-readiness guard and passed
-bounded post-reboot checks; the complete cause of the earlier persistent failure
-has not been isolated. The later OL5 experiment preserves that guard and passed
-an ordinary-input and single-USB-frame check. The HUB does not install firmware
-automatically.
+### OLE development checkpoint
 
-The current receiver uses asynchronous feature reads. Settings queries
-use 134-byte prepare buffers, while OL9 OLED fragments use 56-byte feature
-calls. Automatic radio updates and same-receiver restores use a 250 ms gap,
-which took about 3.2 seconds per frame in the hardware test. Manual radio
-uploads use the 500 ms gap and take about six seconds per frame.
-The radio DPI widget uses the sensor settings read at connection and passive
-DPI-stage updates from the mouse. See the [receiver transport results](docs/OEM-FIRST-RADIO-READ.md)
-and [OL9 carrier protocol](docs/OL9-CARRIER.md).
+A local development build uses OLE firmware to confirm 2.4 GHz OLED frames
+after the mouse draws them. Small updates advance from the last confirmed
+frame. If a confirmation is missed, the HUB can retry the same update
+before falling back to a full frame. A full refresh waits for idle input,
+so the first frame can take longer than later updates. See the
+[radio OLED protocol and earlier experiments](docs/OL9-CARRIER.md).
 
-The earlier DG3 USB input failure recovered without a PC reboot after a
-temporary Interception bypass for the G9 stack. The original Windows
-registration was restored. See [Windows input recovery](docs/WINDOWS-INPUT-RECOVERY.md)
-and [OLED development checkpoints](docs/OLED-RETENTION-DESIGN.md).
+The local build pauses background OLED writes while a mouse button is held
+and resumes after release. In a 9.8-second left-button hold, Windows recorded
+one press and one release, with no OLED packets sent during the hold.
+The next frame was confirmed about 0.7 seconds after release.
+
+Launching the registered Windows startup command in the current session
+started the local build in the tray, read the active profile over 2.4 GHz
+and restored the saved static frame with confirmation from the mouse.
+An actual Windows sign-in remains to be checked. The OLE implementation
+is pending a source release.
 
 ## Quick input check
 
@@ -60,20 +52,18 @@ for USB. The standalone check is built by `build.cmd` or
 `tools\build-input-check.cmd` and is included in the Windows CI package.
 Add `--lang en` for English; Russian is the default.
 
-The nine rows turn green for movement, five mouse clicks, wheel up/down and
-the screen button's assigned **0** key. Buttons require both press and release.
-Only events from the selected G9 transport count; another mouse or keyboard
-cannot complete the check. The tool listens to Windows Raw Input without
-hooks, injected input, HID feature requests or device writes.
+The nine rows turn green for movement, five mouse buttons, wheel up/down and
+the OLED button. The input check expects that button to be assigned to **0**.
+Mouse buttons require both press and release. The tool uses Windows Raw Input
+and counts events from the selected G9 transport.
 
 After all nine rows pass, the window closes automatically after two seconds.
 Closing early or reaching the ten-minute limit saves an incomplete result with
 the missing items. Timestamped JSON reports and event logs are saved under
 `%LOCALAPPDATA%\FURYCUBE-G9-PRO\input-checks`; use `--output <new-report.json>`
-to choose a new location. This checks input only, not the OLED image or a full
-hardware/firmware qualification. OL7 receiver checks and the earlier DG2 USB
-and radio checks passed 9/9. DG3 initially collected only 1/9; after the approved
-Interception bypass, separate USB and radio checks passed 9/9.
+to choose a new location. Input checks passed 9/9 over USB on the OLE
+development mouse. Earlier USB and receiver checks are recorded in the
+[hardware test plan](PLAN.md).
 
 ## Build and run
 
@@ -89,14 +79,13 @@ cd FURYCUBE-G9-PRO-HUB
 .\Run-Hub.cmd
 ```
 
-The first build downloads pinned npm dependencies and the WebView2 SDK. Output:
+The first build downloads pinned npm dependencies and the WebView2 SDK. It produces
 `bin/FURYCUBE-G9-PRO-HUB.exe`, `bin/G9Device.exe`, the WebView2 loader assemblies,
 and `frontend/dist`. Keep these together in the project directory.
 
-The manufacturer's software is optional:
-[official G9 PRO downloads](https://www.furycube.com/pages/g9-pro).
-Close the old HUB before changing settings: it can overwrite the mouse using its
-own saved profile. No additional input driver is installed by this project.
+The manufacturer's software is optional. Close it before applying settings in
+this HUB to avoid overwriting changes with an older profile.
+[Official G9 PRO downloads](https://www.furycube.com/pages/g9-pro).
 
 ## Button assignments
 
@@ -166,9 +155,10 @@ Use **+ Image** or **+ Widget**, adjust the layout, then choose **Upload to OLED
 optional GPU/temperature sources use existing local drivers or sensor services.
 Unavailable values show a dash. `DPI#` is a stage number. The numeric DPI
 widget uses device status over USB and the read-back DPI table over 2.4 GHz.
-On 2.4 GHz, background OLED transfers wait for a short break in Windows input.
-If input resumes during a transfer, the next idle update sends a fresh frame.
-Manual uploads and USB live updates can run during input.
+On 2.4 GHz, the HUB waits for a break in Windows input before starting a
+background full-frame transfer. It retries interrupted full frames when
+input goes idle again. The [OLE development build](#ole-development-checkpoint)
+also supports smaller, confirmed updates after the first frame.
 
 Portable examples:
 
@@ -178,20 +168,17 @@ Portable examples:
 | [Clock, DPI and system](examples/screens/clock-dpi-system.g9screen.json) | Clock, numeric DPI, CPU and RAM |
 | [Positioned image](examples/screens/positioned-image.g9screen.json) | An 84 × 20 image at X=18, Y=4, with its bundled asset |
 
-**OLED image uploads are available with OL4 through OL9, OLA, or OLB over USB.
-For 2.4 GHz, use OL9, OLA, or OLB with active profile 1.** Full-frame delivery
-over both connections was confirmed with OL9. OLB input passed separately
-over USB and 2.4 GHz. Visible OLED delivery and input timing during the OLB
-radio test series still need verification. The HUB currently uploads full
-frames. Native OL2/OL3 image writes are disabled after a reproduced long-packet
-assembly failure.
+**The published full-frame path supports OL4 through OL9, OLA and OLB over USB.**
+For 2.4 GHz it supports OL9, OLA and OLB with active profile 1. OL9 was
+used to verify full-frame delivery on both connections. See
+[firmware compatibility](docs/FIRMWARE.md).
 
-The HUB can resend its cached frame when the connection changes. If the 2.4 GHz
-receiver stays plugged in, the HUB watches for the mouse's battery reports to
-resume after a gap of at least nine seconds and restores the last static frame
-after desktop input pauses. The embedded firmware build restores a compiled
-snapshot after power loss. Saving a new layout to the mouse from the editor
-remains open. Host-driven live widgets require a running HUB.
+The HUB can resend its cached frame after reconnection. When the 2.4 GHz
+receiver stays plugged in, it detects the mouse's return through battery
+reports and restores the last static frame after input pauses. A separate
+embedded firmware build can show a compiled layout with a battery indicator
+after power loss. Saving a new layout directly to the mouse from the editor
+is still planned. Host-driven live widgets require a running HUB.
 See [OL4 transport](docs/OLED-USB-CHUNKS.md),
 [stock redraw behaviour](docs/OLED-REDRAW.md) and the
 [experimental retention design](docs/OLED-RETENTION-DESIGN.md).
@@ -219,12 +206,11 @@ between Russian and English. The choice persists. User profile/macro names and
 OLED text stay unchanged; raw device and Windows diagnostics retain their source
 language.
 
-Settings also contains **Start HUB with Windows** and **Resume OLED updates at
-startup**. Both require an explicit choice. Resume starts only after the device
-has been checked; it does not apply a saved mouse profile. A saved static frame
-restores as static, while saved live mode resumes rendering. A cache from an
-earlier process does not start traffic until startup resume is enabled. Closing or minimizing
-the window hides it in the tray; use **Quit HUB** or the tray's **Exit** to stop it.
+In **Settings**, enable **Start HUB with Windows** to launch in the tray when
+you sign in. Enable **Resume OLED updates at startup** to restore a static
+frame or resume live rendering after the HUB checks the mouse. The HUB reads
+the active device settings before resuming the display. Closing or minimizing
+the window hides it in the tray. Use **Quit HUB** or the tray's **Exit** to stop it.
 
 Local data is stored under `%LOCALAPPDATA%\FURYCUBE-G9-PRO`:
 
@@ -256,12 +242,11 @@ npm --prefix frontend test
 .\tools\build-vue-hub.cmd
 ```
 
-The recorded local checkpoint passed **11,403 C# checks**, **41 Python tests** and
-**13 Vue/Edge UI tests**. Browser tests use synthetic bridge data and never open
-the mouse. Native fixtures, firmware emulation and physical checks are distinct;
-proprietary-input tests are explicitly skipped when that input is absent.
-The current GitHub Actions workflow checks/packages the native application;
-Vue desktop packaging is a separate build step.
+The local OLE checkpoint passed 111 OLED stream checks, 69 startup checks,
+60 screen background checks and 35 Vue/Edge tests. Browser and native fixtures
+use simulated device data. Firmware emulation and physical mouse checks are
+recorded in the [test plan](PLAN.md). The Windows CI workflow runs offline
+checks and packages the Vue desktop app with its native backend.
 
 | Area | Main sources |
 | --- | --- |
@@ -272,7 +257,7 @@ Vue desktop packaging is a separate build step.
 | Settings, assignments and profiles | `src/G9MouseSettings.cs`, `src/G9Bindings.cs`, `src/G9ProfileLibrary.cs` |
 | Rendering and sensors | `src/G9Screen.cs`, `src/G9Sensors.cs`, `src/G9TelemetryReader.cs` |
 | OL4 implementation | `src/G9FirmwareOl4Patch.cs`, `firmware/g9_ol4.S` |
-| Offline OL5 radio/retention work | `firmware/g9_ol5.S`, `tools/emulate_ol5_radio.py`, `tools/emulate_ol5_retention.py` |
+| OLED streaming and radio acknowledgements | `src/G9OledStreaming.cs`, `firmware/g9_ol9.S` |
 
 Frontend setup and editing: [frontend/README.md](frontend/README.md).
 Milestones and remaining work: [PLAN.md](PLAN.md).
@@ -280,11 +265,10 @@ Firmware and compatibility: [docs/FIRMWARE.md](docs/FIRMWARE.md).
 Recovery evidence: [docs/RECOVERY.md](docs/RECOVERY.md).
 Hardware identity: [docs/HARDWARE-IDENTITY.md](docs/HARDWARE-IDENTITY.md).
 
-The development unit is BK3633QN48 / EPC-V18U0002, dated 2025-4-3, with a
-PAW3311DB-T2MU sensor. Other revisions are not qualified by a shared product name.
-Firmware research tools need Python, Capstone, Unicorn and a separately obtained
-official image; those are not required to run the HUB. Offline OL5 still needs an
-explicit review of its larger transfer before any installation experiment.
+The development unit uses a BK3633QN48 controller, an EPC-V18U0002 board dated
+2025-04-03 and a PAW3311DB-T2MU sensor. Firmware research tools use Python,
+Capstone, Unicorn and a separately obtained official image. The desktop app
+runs independently of the research tools.
 
 ## License and attribution
 
