@@ -56,17 +56,19 @@ internal sealed partial class G9ScreenEditor : UserControl {
     bool transportAvailable=true;
     bool radioTransport;
     int transportEpoch,uploadSerial;
-    string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9 на профиле 1. Живые данные обновляются, пока HUB открыт.";
+    string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA или OLB на профиле 1. Живые данные обновляются, пока HUB открыт.";
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
     readonly TabControl editingTabs=new TabControl {Dock=DockStyle.Fill};
     readonly string autosaveFile;
     readonly string resumeFrameFile;
     OledResumeCache resumeFrame=new OledResumeCache();
     bool displayOwnedThisRun,resumeFrameInvalid;
+    DateTimeOffset? handledRadioResume;
+    DateTimeOffset radioTransferStarted,radioTransferSettled;
     bool syncing,sampling,syncingGeometry,dragging,dirty,disposedEditor;
     int previewScale=5;
     Point dragOffset;
-    static readonly string[] Names={"Текст","Часы","Заряд мыши","DPI — значение чувствительности","CPU — загрузка процессора","ОЗУ — занятая память","GPU — загрузка видеокарты","Температура процессора","Температура видеокарты","DPI — номер уровня (1–8)"};
+    static readonly string[] Names={"Текст","Часы","Заряд мыши","DPI — значение чувствительности","CPU — загрузка процессора","ОЗУ — занятая память","GPU — загрузка видеокарты","Температура процессора","Температура видеокарты","DPI — номер уровня (1–8)","Индикатор батареи"};
     static readonly string[] Formats={"HH:mm","HH:mm:ss","dd.MM","d MMMM"};
     static readonly string[] FormatNames={"13:45 — часы и минуты","13:45:08 — с секундами","09.11 — день и месяц","9 ноября — дата словами"};
     sealed class LayerItem {
@@ -169,7 +171,13 @@ internal sealed partial class G9ScreenEditor : UserControl {
         bold.CheckedChanged+=delegate{WidgetStyleChanged();};showLabel.CheckedChanged+=delegate{WidgetStyleChanged();};lit.CheckedChanged+=delegate{WidgetStyleChanged();};clearBackground.CheckedChanged+=delegate{WidgetStyleChanged();};
         foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,fontSlider})slider.Track.ValueChanged+=delegate(object sender,EventArgs e){GeometryChanged((TrackBar)sender);};
         preview.Paint+=DrawSelection;preview.MouseDown+=StartDrag;preview.MouseMove+=MoveDrag;preview.MouseUp+=delegate{dragging=false;preview.Capture=false;};preview.Resize+=delegate{Render();};
-        timer.Tick+=async delegate{await RefreshSensors();if(!IsDisposed&&!disposedEditor&&live.Checked)await UploadFrame(background:true,quiet:true);};autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
+        timer.Tick+=async delegate {
+            await RefreshSensors();
+            if(IsDisposed||disposedEditor)return;
+            if(radioTransport)await RestoreAfterRadioGap(telemetry.Snapshot,RadioOledInputPriority.IsDesktopIdle());
+            if(live.Checked)await UploadFrame(background:true,quiet:true);
+        };
+        autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
         live.CheckedChanged+=async delegate{if(syncing)return;if(live.Checked)await UploadFrame(background:true);else{resumeFrame.Freeze();SaveResumeFrame();}};
     }
     LayerItem SelectedLayer(){return layers.SelectedItem as LayerItem;}
@@ -197,7 +205,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
             text.Enabled=textLabel.Enabled=isText;clockFormat.Enabled=formatLabel.Enabled=isClock;text.Text=isText?w.Text??"":"";
             while(clockFormat.Items.Count>Formats.Length)clockFormat.Items.RemoveAt(clockFormat.Items.Count-1);int clockIndex=-1;
             if(selected){for(int i=0;i<Formats.Length;i++)if(Formats[i]==w.Format)clockIndex=i;if(clockIndex<0&&!String.IsNullOrEmpty(w.Format))clockIndex=clockFormat.Items.Add(new ClockChoice {Value=w.Format,Caption="Свой формат: "+w.Format});}
-            clockFormat.SelectedIndex=clockIndex<0?0:clockIndex;bold.Enabled=lit.Enabled=clearBackground.Enabled=selected;showLabel.Enabled=selected&&!isText&&!isClock;
+            bool isBatteryIndicator=selected&&w.Kind==WidgetKind.BatteryIndicator;
+            clockFormat.SelectedIndex=clockIndex<0?0:clockIndex;lit.Enabled=clearBackground.Enabled=selected;bold.Enabled=selected&&!isBatteryIndicator;showLabel.Enabled=selected&&!isText&&!isClock&&!isBatteryIndicator;
             bold.Checked=selected&&w.Bold;showLabel.Checked=selected&&w.ShowLabel;lit.Checked=selected&&w.Lit;clearBackground.Checked=selected&&w.ClearBackground;
             selectionHint.Text=ImageSelected()?"Выбрана картинка. Двигай рамку или открой «Положение и размер». Обработка картинки находится под предпросмотром.":w==null?"Выбери слой в списке или добавь виджет.":Explanation(w.Kind);
         }finally{syncing=previous;}SyncGeometry();
@@ -206,6 +215,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         case WidgetKind.Text:return "Короткая надпись. Её размер и положение задаются на соседней вкладке.";
         case WidgetKind.Clock:return "Время и дата компьютера. По умолчанию используются 24 часа и русский язык.";
         case WidgetKind.Battery:return "Уровень заряда мыши. Если устройство не передаёт значение, показывается прочерк.";
+        case WidgetKind.BatteryIndicator:return "Одно деление на каждые 10% заряда. При ширине 113 px деление занимает 10 px. Прочерк означает, что данных пока нет.";
         case WidgetKind.Dpi:return "Настроенное число точек на дюйм. Считывается из мыши перед передачей на OLED, если прошивка поддерживает этот ответ. Без свежего ответа показывается прочерк. Номер уровня — отдельный виджет.";
         case WidgetKind.DpiStage:return "Последний уровень DPI (1–8), сообщённый мышью. Это номер настройки, а не число точек на дюйм. При уведомлении о смене профиля значение сбрасывается до нового сообщения.";
         case WidgetKind.CpuPercent:return "CPU — процессор компьютера. Показывается его текущая загрузка в процентах.";
@@ -219,7 +229,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         Rectangle bounds=LayerBounds();ScreenWidget w=SelectedWidget();bool available=SelectedLayer()!=null;syncingGeometry=true;
         try{xSlider.Sync(Math.Min(0,bounds.X),Math.Max(project.Width-1,bounds.X),bounds.X,available);ySlider.Sync(Math.Min(0,bounds.Y),Math.Max(project.Height-1,bounds.Y),bounds.Y,available);
             widthSlider.Sync(1,Math.Max(project.Width,bounds.Width),Math.Max(1,bounds.Width),available);heightSlider.Sync(1,Math.Max(project.Height,bounds.Height),Math.Max(1,bounds.Height),available);
-            fontSlider.Sync(4,Math.Max(4,Math.Max(project.Height,w==null?9:(int)Math.Ceiling(w.FontSize))),w==null?9:(int)Math.Round(w.FontSize),w!=null);
+            fontSlider.Sync(4,Math.Max(4,Math.Max(project.Height,w==null?9:(int)Math.Ceiling(w.FontSize))),w==null?9:(int)Math.Round(w.FontSize),w!=null&&w.Kind!=WidgetKind.BatteryIndicator);
         }finally{syncingGeometry=false;}
     }
     void GeometryChanged(TrackBar source){
@@ -242,7 +252,22 @@ internal sealed partial class G9ScreenEditor : UserControl {
     }
     void MoveDrag(object sender,MouseEventArgs e){if(!dragging||SelectedLayer()==null)return;Point p=CanvasPoint(e.Location);Rectangle b=LayerBounds();b.X=Math.Max(0,Math.Min(project.Width-1,p.X-dragOffset.X));b.Y=Math.Max(0,Math.Min(project.Height-1,p.Y-dragOffset.Y));SetBounds(b);}
     void AddWidget(){var w=new ScreenWidget {Kind=WidgetKind.Text,X=0,Y=Math.Max(0,project.Height/2),Width=project.Width,Height=Math.Max(1,project.Height/2),FontSize=9,Text="Новый текст"};project.Widgets.Add(w);if(project.Composition==CompositionMode.Image)project.Composition=CompositionMode.ImageAndWidgets;SyncControls(w,false);editingTabs.SelectedIndex=0;Changed();text.Focus();text.SelectAll();}
-    void RemoveLayer(){LayerItem selected=SelectedLayer();if(selected==null)return;if(selected.Image){project.ImageFile=null;project.ImageX=project.ImageY=project.ImageWidth=project.ImageHeight=0;if(project.Composition!=CompositionMode.Widgets)project.Composition=CompositionMode.Widgets;}else project.Widgets.Remove(selected.Widget);SyncControls(null,false);Changed();}
+    void RemoveLayer() {
+        LayerItem selected=SelectedLayer();
+        if(selected==null)return;
+        if(selected.Image) {
+            project.ImageFile=null;
+            project.ImageX=project.ImageY=project.ImageWidth=project.ImageHeight=project.ImageLayerIndex=0;
+            project.Composition=CompositionMode.Widgets;
+        } else {
+            int index=project.Widgets.IndexOf(selected.Widget);
+            if(index<0)return;
+            if(index<project.ImageLayerIndex)project.ImageLayerIndex--;
+            project.Widgets.RemoveAt(index);
+        }
+        SyncControls(null,false);
+        Changed();
+    }
     int? FreshConfiguredDpi(){return runtimeStatus!=null&&runtimeStatus.IsValid&&!runtimeStatus.IsBusy&&runtimeStatus.IsFresh(DateTimeOffset.UtcNow)&&runtimeStatus.ConfiguredDpi.HasValue?(int?)runtimeStatus.ConfiguredDpi.Value:null;}
     bool UsesNumericDpi(){if(project.Composition==CompositionMode.Image)return false;foreach(var widget in project.Widgets)if(widget.Kind==WidgetKind.Dpi)return true;return false;}
     WidgetContext Context(){var mouse=telemetry.Snapshot;return new WidgetContext {Now=DateTime.Now,CultureName=project.CultureName,BatteryPercent=mouse==null?null:(double?)mouse.BatteryPercent,Dpi=radioTransport && readCachedRadioDpi!=null?readCachedRadioDpi(mouse):FreshConfiguredDpi(),DpiStage=mouse==null?null:mouse.DpiStage,CpuPercent=snapshot==null?null:snapshot.CpuUsagePercent,RamPercent=snapshot==null?null:snapshot.RamUsagePercent,GpuPercent=snapshot==null?null:snapshot.GpuUsagePercent,CpuTemperatureC=snapshot==null?null:snapshot.CpuTemperatureCelsius,GpuTemperatureC=snapshot==null?null:snapshot.GpuTemperatureCelsius};}
@@ -289,6 +314,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
         if(prioritizeInput&&!RadioOledInputPriority.IsDesktopIdle()){
             lastUploadError=null;oledNote=WaitingForInputIdle;Render();return;
         }
+        var radioResumeAtStart=radioTransport?telemetry.Snapshot.RadioBatteryResumedAt:null;
+        if(radioTransport)radioTransferStarted=DateTimeOffset.UtcNow;
         lastUploadError=null;uploading=true;upload.Enabled=false;runtimeStatus=null;oledNote="Проверяю прошивку и передаю кадр…";Render();
         try{
             // Radio rendering uses the checked settings snapshot and passive
@@ -306,10 +333,11 @@ internal sealed partial class G9ScreenEditor : UserControl {
             if(prioritizeInput&&sent==null){oledNote=WaitingForInputIdle;return;}
             oledNote=sent;
             resumeFrame.Remember(pixels,live.Checked);resumeFrameInvalid=false;displayOwnedThisRun=true;SaveResumeFrame();
+            MarkRadioResume(radioResumeAtStart);
             if(live.Checked)oledNote+=" Автообновление включено; HUB должен работать.";if(!quiet)Log(oledNote);
         }
         catch(Exception error){if(epoch==transportEpoch&&!IsDisposed&&!disposedEditor){lastUploadError=error;runtimeStatus=null;live.Checked=false;oledNote="Передача остановлена: "+error.Message;Log(oledNote);}}
-        finally{if(operation==uploadSerial){uploading=false;if(!IsDisposed&&!disposedEditor){upload.Enabled=transportAvailable;Render();}}}
+        finally{FinishTransfer(operation);}
     }
     internal bool IsLive {get {return live.Checked;}}
     internal string CaptureProjectJson() {
@@ -333,6 +361,8 @@ internal sealed partial class G9ScreenEditor : UserControl {
     internal bool SuspendDevice(string reason) {
         bool wasLive=live.Checked||displayOwnedThisRun;transportEpoch++;uploadSerial++;uploading=false;runtimeStatus=null;
         telemetry.Dispose();telemetry=new G9TelemetryReader();
+        handledRadioResume=null;
+        radioTransferStarted=radioTransferSettled=default(DateTimeOffset);
         transportAvailable=false;bool previous=syncing;syncing=true;try{live.Checked=false;}finally{syncing=previous;}live.Enabled=false;upload.Enabled=false;
         oledNote=reason;Render();return wasLive;
     }
@@ -347,15 +377,54 @@ internal sealed partial class G9ScreenEditor : UserControl {
         if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null||uploading)return;
         if(resumeFrameInvalid){oledNote="Сохранённый кадр повреждён; отправьте макет вручную.";Render();return;}
         if(!resumeFrame.HasFrame||resumeFrame.Live){await ResumeLive();return;}
+        var radioResumeAtStart=radioTransport?telemetry.Snapshot.RadioBatteryResumedAt:null;
+        int epoch=transportEpoch;
+        await RestoreSavedFrame(sendFrame);
+        if(epoch==transportEpoch)MarkRadioResume(radioResumeAtStart);
+    }
+    void MarkRadioResume(DateTimeOffset? resumedAt) {
+        if(resumedAt.HasValue && (!handledRadioResume.HasValue || resumedAt>handledRadioResume))
+            handledRadioResume=resumedAt;
+    }
+    internal async Task RestoreAfterRadioGap(TelemetrySnapshot sample,bool desktopIdle) {
+        if(disposedEditor||IsDisposed||!radioTransport||!transportAvailable||sendLiveFrame==null||!sample.RadioBatteryResumedAt.HasValue)return;
+        var resumedAt=sample.RadioBatteryResumedAt.Value;
+        if(handledRadioResume.HasValue&&resumedAt<=handledRadioResume.Value)return;
+        if(live.Checked||!displayOwnedThisRun||!resumeFrame.HasFrame||resumeFrame.Live){
+            handledRadioResume=resumedAt;
+            return;
+        }
+        if(uploading||!desktopIdle||!sample.BatterySampledAt.HasValue||sample.BatterySampledAt>sample.SampledAt||
+            sample.SampledAt-sample.BatterySampledAt.Value>=TelemetryCache.RadioBatteryGap)return;
+        if(resumedAt>=radioTransferStarted && resumedAt<=radioTransferSettled){
+            MarkRadioResume(resumedAt);
+            return;
+        }
+        if(sample.ReportedProfileId.HasValue && sample.ReportedProfileId.Value!=1)return;
+        int epoch=transportEpoch;
+        if(await RestoreSavedFrame(sendLiveFrame) && epoch==transportEpoch)MarkRadioResume(resumedAt);
+    }
+    // A null response means desktop input interrupted a guarded radio transfer.
+    async Task<bool> RestoreSavedFrame(Func<byte[],Task<string>> sender) {
         int epoch=transportEpoch,operation=++uploadSerial;
+        if(radioTransport)radioTransferStarted=DateTimeOffset.UtcNow;
         byte[] pixels=resumeFrame.GetFrame();lastUploadError=null;uploading=true;upload.Enabled=false;
         bool previous=syncing;syncing=true;try{live.Checked=false;}finally{syncing=previous;}
         try{
-            string sent=await sendFrame(pixels);
-            if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;
+            string sent=await sender(pixels);
+            if(IsDisposed||disposedEditor||epoch!=transportEpoch)return false;
+            if(sent==null){oledNote=WaitingForInputIdle;return false;}
             displayOwnedThisRun=true;oledNote="Восстановлен последний переданный кадр. "+sent;Log(oledNote);
+            return true;
         }catch(Exception error){if(epoch==transportEpoch&&!IsDisposed&&!disposedEditor){lastUploadError=error;oledNote="Восстановление OLED остановлено: "+error.Message;Log(oledNote);}}
-        finally{if(operation==uploadSerial){uploading=false;if(!IsDisposed&&!disposedEditor){upload.Enabled=transportAvailable;Render();}}}
+        finally{FinishTransfer(operation);}
+        return true;
+    }
+    void FinishTransfer(int operation) {
+        if(operation!=uploadSerial)return;
+        if(radioTransport)radioTransferSettled=DateTimeOffset.UtcNow.AddSeconds(3);
+        uploading=false;
+        if(!IsDisposed&&!disposedEditor){upload.Enabled=transportAvailable;Render();}
     }
     void ChooseImage(){using(var dialog=new OpenFileDialog {Filter="Картинки|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff"})if(dialog.ShowDialog(this)==DialogResult.OK){project.ImageFile=dialog.FileName;if(project.Composition==CompositionMode.Widgets)project.Composition=project.Widgets.Count>0?CompositionMode.ImageAndWidgets:CompositionMode.Image;SyncControls(null,true);Changed();}}
     void SaveProject(){using(var dialog=new SaveFileDialog {Filter="Проект экрана|*.g9screen.json",FileName="screen.g9screen.json"})if(dialog.ShowDialog(this)==DialogResult.OK)try{ScreenWidget w=SelectedWidget();bool image=ImageSelected();project.Save(dialog.FileName);SyncControls(w,image);Log("Сохранён проект экрана: "+dialog.FileName);dirty=true;SaveAutosave();}catch(Exception e){MessageBox.Show(this,e.Message,"Сохранение проекта",MessageBoxButtons.OK,MessageBoxIcon.Error);}}

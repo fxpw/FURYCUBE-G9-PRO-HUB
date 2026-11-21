@@ -84,6 +84,7 @@ namespace Furycube.G9.Telemetry
         public bool? IsCharging { get; internal set; }
         public bool? IsFull { get; internal set; }
         public DateTimeOffset? BatterySampledAt { get; internal set; }
+        internal DateTimeOffset? RadioBatteryResumedAt { get; set; }
         public int? DpiStage { get; internal set; }
         public DateTimeOffset? DpiStageSampledAt { get; internal set; }
         // Last notification only: lost packets and silent SET0C changes mean it
@@ -101,10 +102,14 @@ namespace Furycube.G9.Telemetry
     // hooks, feature SETs/GETs, polling or input injection are created here.
     public sealed class TelemetryCache
     {
+        // The receiver can withhold battery reports during an OLED transfer.
+        // A full frame and the next scheduled report took up to eight seconds.
+        internal static readonly TimeSpan RadioBatteryGap = TimeSpan.FromSeconds(9);
         readonly string connectionKey;
         readonly object gate = new object();
         TelemetryUpdate battery, dpiStage, reportedProfile;
         DateTimeOffset batteryAt, dpiAt, profileAt;
+        DateTimeOffset? radioBatteryResumedAt;
 
         public TelemetryCache(string connectionKey)
         {
@@ -125,6 +130,8 @@ namespace Furycube.G9.Telemetry
                 if (update.Kind == TelemetryReportKind.Battery)
                 {
                     if (battery != null && receivedAt < batteryAt) return false;
+                    if (productId == 0xFA60 && battery != null && receivedAt - batteryAt >= RadioBatteryGap)
+                        radioBatteryResumedAt = receivedAt;
                     battery = update;
                     batteryAt = receivedAt;
                 }
@@ -174,6 +181,7 @@ namespace Furycube.G9.Telemetry
                     result.IsCharging = battery.BatteryState == Telemetry.BatteryState.Charging;
                     result.IsFull = battery.BatteryState == Telemetry.BatteryState.Full;
                     result.BatterySampledAt = batteryAt;
+                    if (radioBatteryResumedAt <= now) result.RadioBatteryResumedAt = radioBatteryResumedAt;
                 }
                 if (dpiStage != null && IsFresh(dpiAt, now, dpiStageMaximumAge))
                 {
@@ -191,7 +199,11 @@ namespace Furycube.G9.Telemetry
 
         public void Reset()
         {
-            lock (gate) { battery = null; dpiStage = null; reportedProfile = null; batteryAt = dpiAt = profileAt = default(DateTimeOffset); }
+            lock (gate) {
+                battery = null; dpiStage = null; reportedProfile = null;
+                batteryAt = dpiAt = profileAt = default(DateTimeOffset);
+                radioBatteryResumedAt = null;
+            }
         }
 
         static bool IsFresh(DateTimeOffset sample, DateTimeOffset now, TimeSpan maximumAge)

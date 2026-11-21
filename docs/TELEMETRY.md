@@ -109,6 +109,22 @@ kernel completion/process exit instead of being freed early.
 No reconnect/profile query is sent. A disconnected session ends; the owner can
 dispose and create a new reader when its device selection changes.
 
+### Restoring a static OLED frame over an unchanged receiver
+
+An active G9 sent a battery report about every two seconds in the radio trace.
+Switching the mouse off for ten seconds interrupted those reports for 11.74
+seconds while the receiver stayed present. The reader now records when a valid
+radio battery report follows a gap of nine seconds or more. A full OLED
+transfer temporarily delayed the next report by up to eight seconds. Return
+events during an OLED transfer or its three-second settling window are ignored.
+Sleep or a radio interruption can also produce a return event.
+
+If the HUB already sent a static frame in this run, it sends its cached pixels
+once after that signal and a pause in desktop input. The existing radio stream
+checks for new input before every fragment and defers an interrupted replay. A
+transport error ends that attempt. Recovery does not poll mouse settings, and
+ordinary live widgets keep their scheduled update path.
+
 `G9Device.exe telemetry --duration-ms 500 --pid 2148` can safely be implemented
 by opening **only** the matched page000A collection for overlapped `ReadFile`,
 using shared access, bounded cancellation and the existing selected-device

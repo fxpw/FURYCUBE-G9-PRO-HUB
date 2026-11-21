@@ -11,6 +11,26 @@ internal static class TelemetryTests
     static bool Accept(TelemetryCache cache, byte[] report, DateTimeOffset at)
     { return cache.AcceptInput("wired-session", 0x1D57, 0x2148, 0xA, 0, report, at); }
 
+    static void CheckRadioReturn(DateTimeOffset now)
+    {
+        var cache = new TelemetryCache("receiver");
+        Func<DateTimeOffset, bool> receive = at => cache.AcceptInput("receiver", 0x1D57, 0xFA60, 0xA, 0, Battery(1, 86), at);
+        var maxAge = TimeSpan.FromSeconds(90);
+        Check(receive(now) && receive(now.AddSeconds(2)) && receive(now.AddSeconds(7)),
+            "initial reports and a short gap are accepted");
+        Check(cache.Snapshot(now.AddSeconds(7), maxAge).RadioBatteryResumedAt == null,
+            "short gap does not signal a return");
+        var returned = now.AddSeconds(19);
+        Check(receive(returned) && receive(returned.AddSeconds(2)), "battery reports resume with unchanged charge");
+        Check(cache.Snapshot(returned.AddSeconds(2), maxAge).RadioBatteryResumedAt == returned,
+            "radio return survives later regular battery samples");
+        Check(!receive(now) && cache.Snapshot(returned.AddSeconds(3), maxAge).RadioBatteryResumedAt == returned,
+            "out-of-order report cannot trigger a return");
+        cache.Reset();
+        Check(receive(returned.AddSeconds(25)) && cache.Snapshot(returned.AddSeconds(25), maxAge).RadioBatteryResumedAt == null,
+            "a new input session starts without a return event");
+    }
+
     static void CheckProfiles(DateTimeOffset now)
     {
         TelemetryUpdate update;
@@ -132,6 +152,7 @@ internal static class TelemetryTests
                 !TelemetryProtocol.IsSupportedInputCollection(0x1D57, 0x2148, 0xA, 0, 6), "caps input length must equal fixed five-byte native buffer");
             var now = new DateTimeOffset(2026, 11, 9, 0, 0, 0, TimeSpan.Zero);
             CheckProfiles(now);
+            CheckRadioReturn(now);
             var cache = new TelemetryCache("wired-session");
             var sample = cache.Snapshot(now, TimeSpan.FromSeconds(20));
             Check(sample.BatteryPercent == null && sample.IsCharging == null && sample.DpiStage == null &&

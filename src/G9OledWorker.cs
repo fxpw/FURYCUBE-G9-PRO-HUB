@@ -107,7 +107,7 @@ internal sealed class G9OledWorker : IDisposable {
         if(!line.StartsWith("OLED_SEND ",StringComparison.Ordinal)&&!line.StartsWith("OLED_FRAME_",StringComparison.Ordinal)&&!line.StartsWith("OLED_STATUS_",StringComparison.Ordinal))SafeLog(line);
     }
     string FailureText(string problem){int code;return TryExited(out code)&&code==4?
-        "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9 и активный профиль 1.":problem;}
+        "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA или OLB и активный профиль 1.":problem;}
     enum Completion { Ready, Frame, Status }
     void WaitFor(Completion completion,int index){
         var watch=Stopwatch.StartNew();

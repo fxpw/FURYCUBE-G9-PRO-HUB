@@ -55,6 +55,7 @@ export interface ScreenProject {
   ImageY: number;
   ImageWidth: number;
   ImageHeight: number;
+  ImageLayerIndex?: number;
   ImageOptions: {
     Resize: number;
     Threshold: number;
@@ -141,6 +142,7 @@ export const widgetLabels = [
   "Температура CPU",
   "Температура GPU",
   "Уровень DPI",
+  "Индикатор батареи",
 ];
 export function newWidget(kind = 0): ScreenWidget {
   return {

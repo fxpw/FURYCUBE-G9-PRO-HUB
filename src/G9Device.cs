@@ -400,7 +400,7 @@ internal sealed class G9Connection : IDisposable, IOledDeviceSession, IOledRunti
             oledAuthorized = oledRuntimeStatusAuthorized = false; throw new OledFirmwareUnsupportedException("The opened device identity changed; OLED operations are disabled.");
         }
         if (Device.Product == 0xFA60 && !discovery && !oledRadioAuthorized)
-            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL9 discovery on this same handle.");
+            throw new OledFirmwareUnsupportedException("OLED over the receiver requires OL9, OLA or OLB discovery on this same handle.");
     }
     public byte[] ReadOledFirmware() {
         lock (oledGate) {

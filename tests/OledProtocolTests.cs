@@ -45,7 +45,7 @@ internal static class OledProtocolTests {
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'7',false)).SupportsShortWrites, "OL7 configuration-input guard retains USB OLED support");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'8',false)).SupportsShortWrites, "OL8 candidate retains guarded USB transport");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'9',false)).SupportsShortWrites, "OL9 candidate retains guarded USB transport");
-        Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'A',false)); }, "unknown OLED extension revision");
+        Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply,7,(byte)'C',false)); }, "unknown OLED extension revision");
         Check(OledProtocol.DecodeFirmwareCapabilities(Modified(fake.Reply, 1, 5, false)).VersionMinor == 8, "ARM version reply logical length five with complete eight-byte transfer");
         Check(BitConverter.ToString(OledProtocol.BuildDiscoveryRequest()) == "A0-0B-08-00-01-00-00-00", "stock-safe existing version query");
         Reject(delegate { OledProtocol.DecodeFirmwareCapabilities(new byte[] { 11, 8, 1, 1, 8, 0, 0, 0 }); }, "stock firmware zeros");

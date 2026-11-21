@@ -48,8 +48,9 @@ internal static class OledStreamTests {
             "OLED_STREAM_READY\nOLED_FRAME_DEFERRED 1\nOLED_FRAME_DEFERRED 2\nOLED_FRAME_SENT 3\nOLED_FRAME_SENT 4\n",
             "radio live defers before first or next fragment while manual frames bypass input priority");
         Check(radio.Reads == 1 && radio.Writes.Count == 25 && checksAtFragment == 15 &&
-            delays.Count == 25 && delays.TrueForAll(value => value == 500),
-            "radio priority reuses discovery and preserves pacing for each submitted fragment");
+            delays.Count == 25 && delays.GetRange(0, 13).TrueForAll(value => value == 250) &&
+            delays.GetRange(13, 12).TrueForAll(value => value == 500),
+            "radio stream reuses discovery and paces guarded and manual fragments separately");
         Check(radio.Writes[0][10] != 0 && radio.Writes[1][10] == radio.Writes[0][10] && radio.Writes[13][10] == 0,
             "a partial initial frame does not consume display initialization");
 

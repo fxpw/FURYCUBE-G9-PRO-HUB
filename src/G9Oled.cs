@@ -44,7 +44,7 @@ namespace Furycube.G9.Oled {
         public string Extension { get; private set; }
         public bool SupportsRuntimeStatus { get { return Extension == "OL3" || SupportsShortWrites; } }
         public bool SupportsShortWrites { get { return Extension[2] >= '4'; } }
-        public bool SupportsRadioWrites { get { return Extension == "OL9"; } }
+        public bool SupportsRadioWrites { get { return Extension == "OL9" || Extension == "OLA" || Extension == "OLB"; } }
         internal FirmwareCapabilities(byte major, byte minor, string extension) { VersionMajor = major; VersionMinor = minor; Extension = extension; }
     }
 
@@ -63,7 +63,8 @@ namespace Furycube.G9.Oled {
         public static FirmwareCapabilities DecodeFirmwareCapabilities(byte[] reply, byte? expectedMajor = 1, byte? expectedMinor = 8) {
             Require(reply != null && reply.Length == 8 && reply[0] == 0x0B && (reply[1] == 5 || reply[1] == 8) && reply[2] == 1,
                 "Unexpected firmware-version response; OLED writes are disabled");
-            Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' && reply[7] >= (byte)'2' && reply[7] <= (byte)'9',
+            Require(reply[5] == (byte)'O' && reply[6] == (byte)'L' &&
+                ((reply[7] >= (byte)'2' && reply[7] <= (byte)'9') || reply[7] == (byte)'A' || reply[7] == (byte)'B'),
                 "Firmware does not advertise a supported OLED extension; OLED operations are disabled");
             Require((!expectedMajor.HasValue || reply[3] == expectedMajor.Value) && (!expectedMinor.HasValue || reply[4] == expectedMinor.Value),
                 "Firmware version does not match the supported OLED revision");
@@ -78,7 +79,7 @@ namespace Furycube.G9.Oled {
             ValidateDevice(vendor, product);
             if (capabilities == null) throw new InvalidOperationException("Verified OLED discovery is required");
             if (product == 0xFA60 && !capabilities.SupportsRadioWrites)
-                throw new NotSupportedException("OLED through the 2.4 GHz receiver requires OL9; no image or status report was sent");
+                throw new NotSupportedException("OLED through the 2.4 GHz receiver requires OL9, OLA or OLB; no image or status report was sent");
         }
 
         public static ushort Crc16CcittFalse(byte[] bytes, int offset, int length) {
@@ -236,6 +237,8 @@ namespace Furycube.G9.Oled {
                 byte[][] reports = capabilities.SupportsShortWrites ? OledShortProtocol.BuildFrameReports(pixels, !displayInitialized) :
                     OledProtocol.BuildFrameReports(pixels, !displayInitialized); int sent = 0;
                 bool radio = discoveredProduct == 0xFA60;
+                int fragmentDelay = 25;
+                if (radio) fragmentDelay = canSendRadioFragment != null ? 250 : 500;
                 try {
                     foreach (byte[] report in reports) {
                         ValidateIdentity();
@@ -243,9 +246,8 @@ namespace Furycube.G9.Oled {
                         if (radio && canSendRadioFragment != null && !canSendRadioFragment())
                             return new OledTransferResult(sent, true);
                         transport.SendFeature(report); sent++;
-                        // Keep the tested receiver gap after the last fragment
-                        // before the next frame or settings read.
-                        if (radio || sent < reports.Length) wait(radio ? 500 : 25);
+                        // Keep the receiver gap after the last fragment too.
+                        if (radio || sent < reports.Length) wait(fragmentDelay);
                     }
                 }
                 catch { capabilities = null; displayInitialized = false; throw; }

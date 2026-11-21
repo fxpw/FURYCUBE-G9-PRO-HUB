@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { t, locale, firmwareName, oledStatus } from "../i18n";
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onDeactivated,
+  ref,
+  watch,
+} from "vue";
 import { call, isDesktop } from "../bridge";
 import { busy, notify, run, state } from "../store";
 import {
@@ -14,13 +21,20 @@ import {
 import AppIcon from "./AppIcon.vue";
 import RangeField from "./RangeField.vue";
 const project = ref<ScreenProject>(clone(state.value.screen.project));
+const batteryFullWidth = 113;
+const batteryIndicatorKind = 10;
 const selected = ref(project.value.Widgets[0]?.Id || "image"),
   addKind = ref(1),
   showGuides = ref(true),
   previewLoading = ref(false);
 const stage = ref<HTMLElement>(),
   demoCanvas = ref<HTMLCanvasElement>(),
+  inspector = ref<HTMLElement>(),
+  layerMenu = ref<HTMLElement>(),
   png = ref(state.value.screen.pngBase64);
+const contextMenu = ref<{ id: string; x: number; y: number } | null>(null);
+const draggingLayer = ref<string | null>(null);
+const dropTarget = ref<{ id: string; after: boolean } | null>(null);
 let hydrating = false,
   revision = 0,
   acknowledged = 0,
@@ -30,8 +44,17 @@ let timer: ReturnType<typeof setTimeout> | undefined;
 const activeWidget = computed(() =>
   project.value.Widgets.find((widget) => widget.Id === selected.value),
 );
-const imageSelected = computed(() => selected.value === "image");
-const layers = computed(() => [...project.value.Widgets].reverse());
+const hasImage = computed(() => Boolean(project.value.ImageFile));
+const imageSelected = computed(() => selected.value === "image" && hasImage.value);
+const layers = computed(() => {
+  const stack = project.value.Widgets.map((widget) => ({
+    id: widget.Id,
+    widget: widget as ScreenWidget | null,
+  }));
+  if (hasImage.value)
+    stack.splice(project.value.ImageLayerIndex ?? 0, 0, { id: "image", widget: null });
+  return stack.reverse();
+});
 const frameSource = computed(() =>
   !png.value
     ? ""
@@ -39,30 +62,28 @@ const frameSource = computed(() =>
       ? png.value
       : `data:image/png;base64,${png.value}`,
 );
-const hasImage = computed(() => Boolean(project.value.ImageFile));
 const supportsUpload = computed(
   () =>
     isDesktop &&
     state.value.device.connected &&
     ((state.value.device.connection === "usb" &&
-      /OL[4-9](?:\D|$)/.test(state.value.device.firmware)) ||
+      /\bOL[4-9AB]\b/.test(state.value.device.firmware)) ||
       (state.value.device.connection === "radio" &&
-        /OL9(?:\D|$)/.test(state.value.device.firmware) &&
+        /\bOL[9AB]\b/.test(state.value.device.firmware) &&
         state.value.device.profile === 1)),
 );
 function hydrate(screen: ScreenState) {
   hydrating = true;
   project.value = clone(screen.project);
   png.value = screen.pngBase64;
-  if (!project.value.Widgets.some((widget) => widget.Id === selected.value))
-    selected.value = project.value.Widgets[0]?.Id || "image";
+  if (!imageSelected.value && !activeWidget.value)
+    selected.value = layers.value[0]?.id ?? "";
   hydrating = false;
 }
 watch(
   () => state.value.screen,
   (screen) => {
     if (revision === acknowledged) hydrate(screen);
-    else png.value = screen.pngBase64;
   },
   { deep: true },
 );
@@ -77,6 +98,9 @@ watch(
   },
   { deep: true, flush: "sync" },
 );
+watch(busy, (isBusy) => {
+  if (!isBusy && acknowledged < revision) void updatePreview();
+});
 async function updatePreview(): Promise<boolean> {
   clearTimeout(timer);
   if (!isDesktop) {
@@ -85,8 +109,10 @@ async function updatePreview(): Promise<boolean> {
     return true;
   }
   if (updating) return updating;
+  if (acknowledged === revision || disposed) return true;
+  if (busy.value) return false;
+  previewLoading.value = true;
   updating = (async () => {
-    previewLoading.value = true;
     try {
       while (acknowledged < revision && !disposed) {
         const current = revision;
@@ -103,18 +129,28 @@ async function updatePreview(): Promise<boolean> {
     } catch (error) {
       notify(error instanceof Error ? error.message : String(error), true);
       return false;
-    } finally {
-      updating = null;
-      previewLoading.value = false;
     }
   })();
-  return updating;
+  try {
+    return await updating;
+  } finally {
+    updating = null;
+    previewLoading.value = false;
+  }
 }
 async function perform(method: string) {
   if (await updatePreview()) {
     const result = await run(method);
-    if (result) hydrate(result.screen);
+    if (result && revision === acknowledged) hydrate(result.screen);
   }
+}
+function showImageSettings() {
+  selected.value = "image";
+  void nextTick(() => inspector.value?.scrollIntoView({ block: "nearest" }));
+}
+async function chooseImage() {
+  await perform("screen.chooseImage");
+  if (hasImage.value) showImageSettings();
 }
 async function live(enabled: boolean) {
   if (!enabled || (await updatePreview()))
@@ -127,23 +163,29 @@ async function liveChanged(event: Event) {
 }
 function addWidget() {
   const widget = newWidget(addKind.value);
-  widget.X = 3;
+  widget.X = Math.min(3, project.value.Width - 1);
   widget.Y = Math.min(14, Math.max(0, project.value.Height - 12));
-  widget.Width = Math.min(60, project.value.Width - widget.X);
+  widget.Width = Math.min(
+    widget.Kind === batteryIndicatorKind ? batteryFullWidth : 60,
+    project.value.Width - widget.X,
+  );
+  if (widget.Kind === batteryIndicatorKind) widget.Height = Math.min(9, project.value.Height - widget.Y);
   project.value.Widgets.push(widget);
   selected.value = widget.Id;
   if (project.value.Composition === 0) project.value.Composition = 2;
 }
-function remove() {
-  if (imageSelected.value) {
-    project.value.ImageFile = null;
-    project.value.Composition = 1;
-  } else {
-    project.value.Widgets = project.value.Widgets.filter(
-      (widget) => widget.Id !== selected.value,
-    );
-    selected.value = project.value.Widgets[0]?.Id || "image";
-  }
+function remove(id = selected.value) {
+  const index = layers.value.findIndex((layer) => layer.id === id);
+  if (index < 0) return;
+  const remaining = layers.value.filter((layer) => layer.id !== id);
+  project.value = {
+    ...project.value,
+    ...layerOrder(remaining),
+    ImageFile: id === "image" ? null : project.value.ImageFile,
+    Composition: id === "image" ? 1 : project.value.Composition,
+  };
+  if (selected.value === id)
+    selected.value = remaining[Math.min(index, remaining.length - 1)]?.id ?? "";
 }
 function duplicate() {
   if (!activeWidget.value) return;
@@ -154,13 +196,93 @@ function duplicate() {
   selected.value = widget.Id;
 }
 function reorder(direction: number) {
-  const index = project.value.Widgets.findIndex(
-    (widget) => widget.Id === selected.value,
-  );
-  const target = index + direction;
-  if (index < 0 || target < 0 || target >= project.value.Widgets.length) return;
-  const copy = project.value.Widgets.splice(index, 1)[0];
-  project.value.Widgets.splice(target, 0, copy);
+  const index = layers.value.findIndex((layer) => layer.id === selected.value);
+  const target = layers.value[index - direction];
+  if (target) moveLayer(selected.value, target.id, direction < 0);
+}
+function layerOrder(ordered: typeof layers.value) {
+  const stack = [...ordered].reverse();
+  return {
+    Widgets: stack.flatMap(({ widget }) => widget ? [widget] : []),
+    ImageLayerIndex: Math.max(0, stack.findIndex(({ id }) => id === "image")),
+  };
+}
+function moveLayer(id: string, target: string, after: boolean) {
+  if (id === target) return;
+  const layer = layers.value.find((entry) => entry.id === id);
+  const ordered = layers.value.filter((entry) => entry.id !== id);
+  const index = ordered.findIndex((entry) => entry.id === target);
+  if (!layer || index < 0) return;
+  ordered.splice(index + Number(after), 0, layer);
+  if (ordered.every((entry, position) => entry.id === layers.value[position].id))
+    return;
+  project.value = { ...project.value, ...layerOrder(ordered) };
+}
+function dragLayer(event: DragEvent, id: string) {
+  if (!event.dataTransfer || layers.value.length < 2) {
+    event.preventDefault();
+    return;
+  }
+  draggingLayer.value = id;
+  selected.value = id;
+  event.dataTransfer.effectAllowed = "move";
+  event.dataTransfer.setData("text/plain", id);
+}
+function hoverLayer(event: DragEvent, id: string) {
+  if (!draggingLayer.value || draggingLayer.value === id) {
+    dropTarget.value = null;
+    return;
+  }
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+  dropTarget.value = { id, after: dropsAfter(event) };
+}
+function dropsAfter(event: DragEvent) {
+  const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  return event.clientY >= bounds.top + bounds.height / 2;
+}
+function endLayerDrag() {
+  draggingLayer.value = null;
+  dropTarget.value = null;
+}
+function dropLayer(event: DragEvent, id: string) {
+  const dragged = draggingLayer.value;
+  if (dragged && dragged !== id) {
+    event.preventDefault();
+    moveLayer(dragged, id, dropsAfter(event));
+  }
+  endLayerDrag();
+}
+let menuAnchor: HTMLElement | null = null;
+function closeLayerMenu(event?: PointerEvent) {
+  if (event && layerMenu.value?.contains(event.target as Node)) return;
+  contextMenu.value = null;
+  window.removeEventListener("pointerdown", closeLayerMenu);
+}
+async function openLayerMenu(event: MouseEvent, id: string) {
+  menuAnchor = event.currentTarget as HTMLElement;
+  const anchor = menuAnchor.getBoundingClientRect();
+  const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+  contextMenu.value = {
+    id,
+    x: fromKeyboard ? anchor.left : event.clientX,
+    y: fromKeyboard ? anchor.bottom : event.clientY,
+  };
+  window.addEventListener("pointerdown", closeLayerMenu);
+  await nextTick();
+  if (!layerMenu.value || !contextMenu.value) return;
+  const { width, height } = layerMenu.value.getBoundingClientRect();
+  contextMenu.value.x = Math.max(6, Math.min(contextMenu.value.x, window.innerWidth - width - 6));
+  contextMenu.value.y = Math.max(6, Math.min(contextMenu.value.y, window.innerHeight - height - 6));
+  layerMenu.value.querySelector("button")?.focus();
+}
+function cancelLayerMenu() {
+  closeLayerMenu();
+  menuAnchor?.focus();
+}
+function removeFromMenu() {
+  if (contextMenu.value) remove(contextMenu.value.id);
+  closeLayerMenu();
 }
 function geometry() {
   if (imageSelected.value)
@@ -193,6 +315,9 @@ function setGeometry(key: "x" | "y" | "width" | "height", value: number) {
 function rectStyle(layer: ScreenWidget | null) {
   const p = project.value;
   return {
+    zIndex: selected.value === (layer?.Id ?? "image")
+      ? layers.value.length
+      : layers.value.length - 1 - layers.value.findIndex(({ id }) => id === (layer?.Id ?? "image")),
     left: `${(100 * (layer ? layer.X : p.ImageX)) / p.Width}%`,
     top: `${(100 * (layer ? layer.Y : p.ImageY)) / p.Height}%`,
     width: `${(100 * (layer ? layer.Width : p.ImageWidth || p.Width)) / p.Width}%`,
@@ -269,7 +394,7 @@ function pointerUp(event: PointerEvent) {
     drag = null;
   }
 }
-function keyMove(event: KeyboardEvent) {
+function keyMove(event: KeyboardEvent, id: string) {
   const directions: Record<string, [number, number]> = {
     ArrowLeft: [-1, 0],
     ArrowRight: [1, 0],
@@ -279,6 +404,7 @@ function keyMove(event: KeyboardEvent) {
   const direction = directions[event.key];
   if (!direction) return;
   event.preventDefault();
+  selected.value = id;
   const current = geometry(),
     amount = event.shiftKey ? 5 : 1;
   setGeometry(
@@ -301,6 +427,21 @@ function label(widget: ScreenWidget) {
     ? widget.Text || t("Текст")
     : t(widgetLabels[widget.Kind]) || t("Виджет");
 }
+function drawDemoBattery(context: CanvasRenderingContext2D, widget: ScreenWidget) {
+  const { X: x, Y: y, Height: height } = widget;
+  const width = Math.min(widget.Width, batteryFullWidth);
+  if (width < 5 || height < 3) return;
+  const bodyWidth = width - 2;
+  context.fillRect(x, y, bodyWidth, 1);
+  context.fillRect(x, y + height - 1, bodyWidth, 1);
+  context.fillRect(x, y + 1, 1, height - 2);
+  context.fillRect(x + bodyWidth - 1, y + 1, 1, height - 2);
+  const terminalHeight = Math.max(1, Math.floor(height / 3));
+  context.fillRect(x + bodyWidth, y + Math.floor((height - terminalHeight) / 2), 2, terminalHeight);
+  const innerWidth = bodyWidth - 2;
+  const dashWidth = Math.min(3, innerWidth);
+  context.fillRect(x + 1 + Math.floor((innerWidth - dashWidth) / 2), y + Math.floor(height / 2), dashWidth, 1);
+}
 function drawDemo() {
   nextTick(() => {
     if (isDesktop || !demoCanvas.value) return;
@@ -315,12 +456,17 @@ function drawDemo() {
       context.rect(w.X, w.Y, w.Width, w.Height);
       context.clip();
       if (w.ClearBackground) {
-        context.fillStyle = "#050607";
+        context.fillStyle = w.Lit ? "#050607" : "#edf2ee";
         context.fillRect(w.X, w.Y, w.Width, w.Height);
+      }
+      context.fillStyle = w.Lit ? "#edf2ee" : "#050607";
+      if (w.Kind === batteryIndicatorKind) {
+        drawDemoBattery(context, w);
+        context.restore();
+        continue;
       }
       context.font = `${w.Bold ? "bold " : ""}${w.FontSize}px monospace`;
       context.textBaseline = "top";
-      context.fillStyle = w.Lit ? "#edf2ee" : "#050607";
       const text =
         w.Kind === 0
           ? w.Text
@@ -337,7 +483,9 @@ watch(locale, drawDemo);
 onBeforeUnmount(() => {
   disposed = true;
   clearTimeout(timer);
+  closeLayerMenu();
 });
+onDeactivated(closeLayerMenu);
 </script>
 <template>
   <div class="oled-toolbar">
@@ -388,7 +536,7 @@ onBeforeUnmount(() => {
     <p>
       {{
         t(
-          "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9 и активный профиль 1. Текущая прошивка:",
+          "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9, OLA или OLB и активный профиль 1. Текущая прошивка:",
         )
       }}
       {{ firmwareName(state.device.firmware) || t("не определена")
@@ -448,7 +596,8 @@ onBeforeUnmount(() => {
                 tabindex="0"
                 :aria-label="t('Положение изображения')"
                 @pointerdown="pointerDown($event, 'image')"
-                @keydown="keyMove"
+                @contextmenu.prevent="openLayerMenu($event, 'image')"
+                @keydown="keyMove($event, 'image')"
               >
                 <span
                   v-if="imageSelected"
@@ -467,7 +616,8 @@ onBeforeUnmount(() => {
                 tabindex="0"
                 :aria-label="label(widget)"
                 @pointerdown="pointerDown($event, widget.Id)"
-                @keydown="keyMove"
+                @contextmenu.prevent="openLayerMenu($event, widget.Id)"
+                @keydown="keyMove($event, widget.Id)"
               >
                 <span
                   v-if="selected === widget.Id"
@@ -504,9 +654,13 @@ onBeforeUnmount(() => {
       <section class="panel">
         <div class="section-heading">
           <h2>{{ t("Слои") }}</h2>
-          <span class="tag">{{
-            project.Widgets.length + (hasImage ? 1 : 0)
-          }}</span>
+          <button
+            v-if="hasImage"
+            class="button subtle image-settings-button"
+            @click="showImageSettings"
+          >
+            <AppIcon name="settings" :size="16" />{{ t("Настройки изображения") }}
+          </button>
         </div>
         <div class="add-layer">
           <select v-model="addKind" :aria-label="t('Добавляемый виджет')">
@@ -526,47 +680,53 @@ onBeforeUnmount(() => {
           ><button
             class="button"
             :disabled="busy || !isDesktop"
-            @click="perform('screen.chooseImage')"
+            @click="chooseImage"
           >
             {{ t("+ Картинка") }}
           </button>
         </div>
         <div class="layer-list">
           <button
-            v-for="widget in layers"
-            :key="widget.Id"
+            v-for="layer in layers"
+            :key="layer.id"
             class="layer-row"
-            :class="{ selected: selected === widget.Id }"
-            @click="selected = widget.Id"
+            :class="{
+              selected: selected === layer.id,
+              dragging: draggingLayer === layer.id,
+              'drop-before': dropTarget?.id === layer.id && !dropTarget.after,
+              'drop-after': dropTarget?.id === layer.id && dropTarget.after,
+            }"
+            :aria-pressed="selected === layer.id"
+            :draggable="layers.length > 1"
+            @click="selected = layer.id"
+            @keydown.delete.prevent="remove(layer.id)"
+            @contextmenu.prevent="openLayerMenu($event, layer.id)"
+            @dragstart="dragLayer($event, layer.id)"
+            @dragover="hoverLayer($event, layer.id)"
+            @dragleave="dropTarget = null"
+            @drop="dropLayer($event, layer.id)"
+            @dragend="endLayerDrag"
           >
-            <span class="layer-kind">{{
-              widget.Kind === 0 ? "T" : "◈"
-            }}</span><span
-              ><strong>{{ label(widget) }}</strong
-              ><small
-                >{{ widget.Width }} × {{ widget.Height }} · X {{ widget.X }}, Y
-                {{ widget.Y }}</small
-              ></span
-            ><span class="layer-order">{{
-              project.Widgets.indexOf(widget) + 1
-            }}</span></button
-          ><button
-            v-if="hasImage"
-            class="layer-row"
-            :class="{ selected: imageSelected }"
-            @click="selected = 'image'"
-          >
-            <AppIcon name="screen" /><span
-              ><strong>{{ t("Изображение") }}</strong
-              ><small>{{
-                project.ImageFile?.split(/[\\/]/).pop()
-              }}</small></span
-            >
+            <span class="layer-kind" aria-hidden="true">
+              <AppIcon v-if="!layer.widget" name="screen" :size="14" />
+              <template v-else>{{ layer.widget.Kind === 0 ? "T" : "◈" }}</template>
+            </span>
+            <span class="layer-description">
+              <strong>{{ layer.widget ? label(layer.widget) : t("Изображение") }}</strong>
+              <small v-if="layer.widget">
+                {{ layer.widget.Width }} × {{ layer.widget.Height }} · X {{ layer.widget.X }}, Y {{ layer.widget.Y }}
+              </small>
+              <small v-else>{{ project.ImageFile?.split(/[\\/]/).pop() }}</small>
+            </span>
+            <AppIcon v-if="layers.length > 1" class="layer-grip" name="grip" :size="16" />
           </button>
           <p v-if="!hasImage && !project.Widgets.length" class="empty-inline">
             {{ t("Добавьте картинку или первый виджет.") }}
           </p>
         </div>
+        <p v-if="layers.length" class="hint layer-list-hint">
+          {{ t("Перетащите слой, чтобы изменить порядок. ПКМ открывает меню слоя.") }}
+        </p>
         <label class="field-label composition-select"
           >{{ t("Содержимое экрана")
           }}<select v-model="project.Composition">
@@ -577,7 +737,7 @@ onBeforeUnmount(() => {
         >
       </section>
     </div>
-    <section class="panel layer-properties">
+    <section ref="inspector" class="panel layer-properties">
       <div class="section-heading">
         <div>
           <span class="eyebrow">{{ t("СВОЙСТВА СЛОЯ") }}</span>
@@ -596,13 +756,47 @@ onBeforeUnmount(() => {
           class="icon-button danger"
           :aria-label="t('Удалить выбранный слой')"
           :title="t('Удалить слой')"
-          @click="remove"
+          @click="remove()"
         >
           <AppIcon name="trash" :size="17" />
         </button>
       </div>
-      <template v-if="activeWidget || (hasImage && imageSelected)"
-        ><div class="geometry-fields">
+      <template v-if="activeWidget || imageSelected">
+        <div v-if="imageSelected" class="image-controls">
+          <label class="field-label">
+            {{ t("Масштабирование") }}
+            <select v-model="project.ImageOptions.Resize">
+              <option :value="0">{{ t("Вписать целиком") }}</option>
+              <option :value="1">{{ t("Заполнить с обрезкой") }}</option>
+              <option :value="2">{{ t("Растянуть") }}</option>
+            </select>
+          </label>
+          <RangeField
+            v-model="project.ImageOptions.Threshold"
+            :label="t('Порог чёрного и белого')"
+            :min="0"
+            :max="255"
+          />
+          <div class="property-toggles">
+            <label class="checkbox">
+              <input v-model="project.ImageOptions.Dither" type="checkbox" />
+              {{ t("Дизеринг · передать полутона точками") }}
+            </label>
+            <label class="checkbox">
+              <input v-model="project.ImageOptions.Invert" type="checkbox" />
+              {{ t("Инвертировать цвета") }}
+            </label>
+            <label class="checkbox">
+              <input v-model="project.ImageOptions.BackgroundLit" type="checkbox" />
+              {{ t("Светлый фон прозрачных областей") }}
+            </label>
+          </div>
+          <button class="button" :disabled="busy || !isDesktop" @click="chooseImage">
+            {{ t("Заменить изображение") }}
+          </button>
+        </div>
+        <h3 class="layer-field-group">{{ t("Положение и размер") }}</h3>
+        <div class="geometry-fields">
           <RangeField
             :label="t('По горизонтали · X')"
             :model-value="geometry().x"
@@ -633,7 +827,7 @@ onBeforeUnmount(() => {
             @update:model-value="setGeometry('height', $event)"
           />
         </div>
-        <hr />
+        <hr v-if="activeWidget" />
         <template v-if="activeWidget"
           ><label class="field-label"
             >{{ t("Тип виджета")
@@ -664,86 +858,67 @@ onBeforeUnmount(() => {
               <option value="dd.MM HH:mm">{{ t("Дата и время") }}</option>
             </select></label
           ><RangeField
+            v-if="activeWidget.Kind !== batteryIndicatorKind"
             v-model="activeWidget.FontSize"
             :label="t('Размер шрифта')"
             :min="4"
             :max="28"
             unit="px"
           />
+          <p v-if="activeWidget.Kind === batteryIndicatorKind" class="hint">
+            {{ t("Деление на каждые 10% заряда. При ширине 113 px каждое деление занимает 10 px.") }}
+          </p>
           <div class="property-toggles">
-            <label class="checkbox"
+            <label v-if="activeWidget.Kind !== batteryIndicatorKind" class="checkbox"
               ><input v-model="activeWidget.Bold" type="checkbox" />{{
                 t("Жирный шрифт")
               }}</label
             ><label class="checkbox"
               ><input v-model="activeWidget.Lit" type="checkbox" />{{
-                t("Светлый текст")
+                t(activeWidget.Kind === batteryIndicatorKind ? "Светлый индикатор" : "Светлый текст")
               }}</label
             ><label class="checkbox"
               ><input
                 v-model="activeWidget.ClearBackground"
                 type="checkbox"
-              />{{ t("Очищать фон под текстом") }}</label
-            ><label v-if="activeWidget.Kind > 1" class="checkbox"
+              />{{ t(activeWidget.Kind === batteryIndicatorKind ? "Очищать фон под индикатором" : "Очищать фон под текстом") }}</label
+            ><label v-if="activeWidget.Kind > 1 && activeWidget.Kind !== batteryIndicatorKind" class="checkbox"
               ><input v-model="activeWidget.ShowLabel" type="checkbox" />{{
                 t("Показывать название показателя")
               }}</label
             >
           </div>
-          <div class="toolbar-group layer-actions">
-            <button class="button subtle" @click="reorder(1)">
-              {{ t("Выше") }}</button><button
-              class="button subtle"
-              @click="reorder(-1)"
-            >
-              {{ t("Ниже") }}</button
-            ><button class="button subtle" @click="duplicate">
-              {{ t("Копия") }}
-            </button>
-          </div></template
-        >
-        <template v-else-if="imageSelected"
-          ><label class="field-label"
-            >{{ t("Масштабирование")
-            }}<select v-model="project.ImageOptions.Resize">
-              <option :value="0">{{ t("Вписать целиком") }}</option>
-              <option :value="1">{{ t("Заполнить с обрезкой") }}</option>
-              <option :value="2">{{ t("Растянуть") }}</option>
-            </select></label
-          ><RangeField
-            v-model="project.ImageOptions.Threshold"
-            :label="t('Порог чёрного и белого')"
-            :min="0"
-            :max="255"
-          />
-          <div class="property-toggles">
-            <label class="checkbox"
-              ><input v-model="project.ImageOptions.Dither" type="checkbox" />{{
-                t("Дизеринг · передать полутона точками")
-              }}</label
-            ><label class="checkbox"
-              ><input v-model="project.ImageOptions.Invert" type="checkbox" />{{
-                t("Инвертировать цвета")
-              }}</label
-            ><label class="checkbox"
-              ><input
-                v-model="project.ImageOptions.BackgroundLit"
-                type="checkbox"
-              />{{ t("Светлый фон прозрачных областей") }}</label
-            >
-          </div>
-          <button
-            class="button"
-            :disabled="busy || !isDesktop"
-            @click="perform('screen.chooseImage')"
-          >
-            {{ t("Заменить изображение") }}
-          </button></template
-        >
+        </template>
+        <div v-if="layers.length > 1 || activeWidget" class="toolbar-group layer-actions">
+          <button class="button subtle" :disabled="layers[0]?.id === selected" @click="reorder(1)">
+            {{ t("Выше") }}
+          </button>
+          <button class="button subtle" :disabled="layers[layers.length - 1]?.id === selected" @click="reorder(-1)">
+            {{ t("Ниже") }}
+          </button>
+          <button v-if="activeWidget" class="button subtle" :disabled="project.Widgets.length >= 128" @click="duplicate">
+            {{ t("Копия") }}
+          </button>
+        </div>
       </template>
       <div v-else class="empty-inline">
         {{ t("Выберите слой в списке или добавьте новый.") }}
       </div>
     </section>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="contextMenu"
+      ref="layerMenu"
+      class="layer-menu"
+      role="menu"
+      :aria-label="t('Меню слоя')"
+      :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }"
+      @keydown.esc.prevent.stop="cancelLayerMenu"
+    >
+      <button type="button" class="button danger" role="menuitem" @click="removeFromMenu">
+        <AppIcon name="trash" :size="16" />{{ t("Удалить слой") }}
+      </button>
+    </div>
+  </Teleport>
 </template>

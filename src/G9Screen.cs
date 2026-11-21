@@ -7,6 +7,7 @@ using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -128,7 +129,7 @@ namespace Furycube.G9.Screen {
         }
     }
 
-    public enum WidgetKind {Text,Clock,Battery,Dpi,CpuPercent,RamPercent,GpuPercent,CpuTemperatureC,GpuTemperatureC,DpiStage}
+    public enum WidgetKind {Text,Clock,Battery,Dpi,CpuPercent,RamPercent,GpuPercent,CpuTemperatureC,GpuTemperatureC,DpiStage,BatteryIndicator}
     public sealed class ScreenWidget {
         public string Id {get;set;}
         public WidgetKind Kind {get;set;}
@@ -167,6 +168,8 @@ namespace Furycube.G9.Screen {
         public WidgetContext() {Now=DateTime.Now;CultureName="ru-RU";}
     }
     public static class WidgetRenderer {
+        internal const int BatteryFullWidth=113;
+        const int BatterySegments=10;
         static string Percent(double? value) {
             if(!value.HasValue||double.IsNaN(value.Value)||double.IsInfinity(value.Value))return "--%";
             return Math.Round(Math.Max(0,Math.Min(100,value.Value))).ToString("0",CultureInfo.InvariantCulture)+"%";
@@ -190,6 +193,34 @@ namespace Furycube.G9.Screen {
                 default:return widget.Text??"";
             }
         }
+        static void DrawBattery(Graphics graphics,Rectangle bounds,Brush ink,double? percent) {
+            int width=Math.Min(bounds.Width,BatteryFullWidth);
+            int height=bounds.Height;
+            if(width<5||height<3)return;
+            int x=bounds.X,y=bounds.Y,bodyWidth=width-2;
+            graphics.FillRectangle(ink,x,y,bodyWidth,1);
+            graphics.FillRectangle(ink,x,y+height-1,bodyWidth,1);
+            graphics.FillRectangle(ink,x,y+1,1,height-2);
+            graphics.FillRectangle(ink,x+bodyWidth-1,y+1,1,height-2);
+            int terminalHeight=Math.Max(1,height/3);
+            graphics.FillRectangle(ink,x+bodyWidth,y+(height-terminalHeight)/2,2,terminalHeight);
+
+            int innerWidth=bodyWidth-2;
+            if(!percent.HasValue||double.IsNaN(percent.Value)||double.IsInfinity(percent.Value)) {
+                int dashWidth=Math.Min(3,innerWidth);
+                graphics.FillRectangle(ink,x+1+(innerWidth-dashWidth)/2,y+height/2,dashWidth,1);
+                return;
+            }
+            int filled=(int)(Math.Max(0,Math.Min(100,percent.Value))/10);
+            int gap=innerWidth>=2*BatterySegments-1?1:0;
+            int fillWidth=innerWidth-gap*(BatterySegments-1);
+            int inset=height>=5?2:1;
+            for(int segment=0;segment<filled;segment++) {
+                int start=segment*fillWidth/BatterySegments;
+                int end=(segment+1)*fillWidth/BatterySegments;
+                if(end>start)graphics.FillRectangle(ink,x+1+start+segment*gap,y+inset,end-start,height-2*inset);
+            }
+        }
         public static MonoFrame Render(MonoFrame background,IEnumerable<ScreenWidget> widgets,WidgetContext context) {
             if(background==null||widgets==null||context==null)throw new ArgumentNullException("background");
             using(Bitmap canvas=background.ToBitmap()) {
@@ -203,10 +234,15 @@ namespace Furycube.G9.Screen {
                         try {
                             graphics.SetClip(bounds,System.Drawing.Drawing2D.CombineMode.Intersect);
                             if(widget.ClearBackground)graphics.FillRectangle(widget.Lit?Brushes.Black:Brushes.White,bounds);
+                            Brush ink=widget.Lit?Brushes.White:Brushes.Black;
+                            if(widget.Kind==WidgetKind.BatteryIndicator) {
+                                DrawBattery(graphics,bounds,ink,context.BatteryPercent);
+                                continue;
+                            }
                             using(var font=new Font(FontFamily.GenericMonospace,widget.FontSize,widget.Bold?FontStyle.Bold:FontStyle.Regular,GraphicsUnit.Pixel))
                             using(var format=(StringFormat)StringFormat.GenericTypographic.Clone()) {
                                 format.FormatFlags|=StringFormatFlags.NoWrap;
-                                graphics.DrawString(GetText(widget,context),font,widget.Lit?Brushes.White:Brushes.Black,new PointF(widget.X,widget.Y),format);
+                                graphics.DrawString(GetText(widget,context),font,ink,new PointF(widget.X,widget.Y),format);
                             }
                         } finally {graphics.Restore(state);}
                     }
@@ -239,6 +275,8 @@ namespace Furycube.G9.Screen {
         // Zero retains Version1 compatibility: use the full canvas dimension.
         public int ImageWidth {get;set;}
         public int ImageHeight {get;set;}
+        // Number of widgets below the image. Older layouts default to zero.
+        public int ImageLayerIndex {get;set;}
         public ImageOptions ImageOptions {get;set;}
         public CompositionMode Composition {get;set;}
         public List<ScreenWidget> Widgets {get;set;}
@@ -251,6 +289,7 @@ namespace Furycube.G9.Screen {
             if(Version!=1)throw new InvalidDataException("Unsupported screen project version");MonoFrame.ValidateGeometry(Width,Height);
             if(ImageOptions==null||Widgets==null||Widgets.Count>128||!Enum.IsDefined(typeof(CompositionMode),Composition))throw new InvalidDataException("Invalid screen project settings");
             if(ImageX < -4096||ImageX>4096||ImageY < -4096||ImageY>4096||ImageWidth<0||ImageHeight<0)throw new InvalidDataException("Invalid image layer geometry");
+            if(ImageLayerIndex<0||ImageLayerIndex>128)throw new InvalidDataException("Invalid image layer position");
             MonoFrame.ValidateGeometry(ImageWidth==0?Width:ImageWidth,ImageHeight==0?Height:ImageHeight);
             ImageOptions.Validate();foreach(ScreenWidget widget in Widgets){if(widget==null)throw new InvalidDataException("Null widget");widget.Validate();}
             CultureInfo.GetCultureInfo(String.IsNullOrEmpty(CultureName)?"ru-RU":CultureName);
@@ -297,19 +336,21 @@ namespace Furycube.G9.Screen {
         }
         public MonoFrame Render(WidgetContext context) {
             Validate();var frame=new MonoFrame(Width,Height);frame.Fill(ImageOptions.BackgroundLit);
-            if(Composition!=CompositionMode.Widgets&&!String.IsNullOrEmpty(ImageFile)) {
+            bool drawImage=Composition!=CompositionMode.Widgets&&!String.IsNullOrEmpty(ImageFile);
+            bool drawWidgets=Composition!=CompositionMode.Image;
+            int widgetsBelowImage=drawImage&&drawWidgets?Math.Min(ImageLayerIndex,Widgets.Count):0;
+            context=context??new WidgetContext();
+            var configured=new WidgetContext {Now=context.Now,BatteryPercent=context.BatteryPercent,Dpi=context.Dpi,DpiStage=context.DpiStage,
+                CpuPercent=context.CpuPercent,RamPercent=context.RamPercent,GpuPercent=context.GpuPercent,
+                CpuTemperatureC=context.CpuTemperatureC,GpuTemperatureC=context.GpuTemperatureC,CultureName=CultureName};
+            if(widgetsBelowImage>0)frame=WidgetRenderer.Render(frame,Widgets.Take(widgetsBelowImage),configured);
+            if(drawImage) {
                 using(var image=new Bitmap(ResolveImagePath())) {
                     MonoFrame layer=ImageConverter.Convert(image,ImageWidth==0?Width:ImageWidth,ImageHeight==0?Height:ImageHeight,ImageOptions);
                     frame.Blit(layer,ImageX,ImageY);
                 }
             }
-            if(Composition!=CompositionMode.Image) {
-                context=context??new WidgetContext();
-                var configured=new WidgetContext {Now=context.Now,BatteryPercent=context.BatteryPercent,Dpi=context.Dpi,DpiStage=context.DpiStage,
-                    CpuPercent=context.CpuPercent,RamPercent=context.RamPercent,GpuPercent=context.GpuPercent,
-                    CpuTemperatureC=context.CpuTemperatureC,GpuTemperatureC=context.GpuTemperatureC,CultureName=CultureName};
-                frame=WidgetRenderer.Render(frame,Widgets,configured);
-            }
+            if(drawWidgets&&widgetsBelowImage<Widgets.Count)frame=WidgetRenderer.Render(frame,Widgets.Skip(widgetsBelowImage),configured);
             return frame;
         }
     }

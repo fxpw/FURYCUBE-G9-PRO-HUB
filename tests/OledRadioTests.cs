@@ -38,6 +38,18 @@ internal static class OledRadioTests {
         upload.WriteFrame(frame);Check(device.Writes==12&&delays.Count==12&&delays.TrueForAll(delegate(int value){return value==500;}),"receiver paces twelve chunks including a gap after the last chunk");
         var reconstructed=new byte[480];for(int n=0;n<12;n++){byte[] p=device.Reports[n];OledShortProtocol.ValidateWriteChunk(p);Check(p[7]==n/3&&p[8]==(n%3)*40,"ordered receiver chunk "+n);Buffer.BlockCopy(p,12,reconstructed,n*40,40);}
         Check(Convert.ToBase64String(frame)==Convert.ToBase64String(reconstructed),"receiver transport preserves all480 bytes");
+        var guardedDevice=new Session();
+        var guardedDelays=new List<int>();
+        var guarded=new OledSender(new NativeOledTransport(guardedDevice),guardedDelays.Add);
+        guarded.Discover();
+        int gateCalls=0;
+        var deferred=guarded.WriteFrame(frame,delegate{return ++gateCalls<=2;});
+        Check(deferred.Deferred&&guardedDevice.Writes==2&&gateCalls==3,"radio input defers before the next fragment");
+        guardedDelays.Clear();
+        var sent=guarded.WriteFrame(frame,delegate{return true;});
+        Check(!sent.Deferred&&sent.FeatureReportsSent==12&&guardedDelays.Count==12&&
+            guardedDelays.TrueForAll(delegate(int value){return value==250;}),
+            "guarded radio sends a complete frame with a 250 ms gap after every fragment");
         device.Product=0x2148;Reject(delegate{upload.WriteFrame(frame);},"stale receiver sender cannot become wired sender");Check(device.Writes==12,"changed identity sends no further chunk");
         Reject(delegate{adapter.ReadRuntimeStatus();},"changed native receiver identity cannot read status");Check(device.StatusReads==1,"status identity guard precedes native read");
         var changing=new Session();changing.DuringVersion=delegate{changing.Product=0x2148;};var changed=new OledSender(new NativeOledTransport(changing));Reject(delegate{changed.Discover();},"identity change during discovery");Check(changing.Writes==0&&changing.StatusReads==0,"changing discovery produces no custom traffic");

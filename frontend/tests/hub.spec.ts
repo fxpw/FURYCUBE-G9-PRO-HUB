@@ -208,6 +208,10 @@ async function desktop(page: Page) {
         let result: unknown = native.state;
         if (request.method === "screen.update") {
           native.state.screen.project = request.payload.project;
+          const canvas = document.createElement("canvas");
+          canvas.width = native.state.screen.project.Widgets.length + 1;
+          canvas.height = 1;
+          native.state.screen.pngBase64 = canvas.toDataURL();
           result = native.state.screen;
         }
         if (request.method === "screen.live")
@@ -383,6 +387,79 @@ test("OLED debounces native previews and flushes latest Pascal DTO before upload
   expect(sent.at(-1).method).toBe("screen.upload");
 });
 
+test("OLED deletion refreshes native preview after enabling live with no pending edit", async ({
+  page,
+}) => {
+  await desktop(page);
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  await page.getByLabel("Обновлять в реальном времени").check();
+  await expect.poll(async () => (await requests(page, "screen.live")).length).toBe(1);
+  await page.getByRole("button", { name: "Удалить выбранный слой" }).click();
+  await expect(page.locator(".layer-list .layer-row")).toHaveCount(0);
+  await expect.poll(async () => (await requests(page, "screen.update")).length).toBe(1);
+  const [update] = await requests(page, "screen.update");
+  expect(update.payload.project.Widgets).toEqual([]);
+  await expect(page.locator(".oled-stage img")).toHaveJSProperty("naturalWidth", 1);
+  expect(await requests(page, "screen.upload")).toHaveLength(0);
+});
+
+test("OLED adds a full-width battery indicator with a silhouette in browser preview", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  await page.getByLabel("Добавляемый виджет").selectOption({ label: "Индикатор батареи" });
+  await page.getByRole("button", { name: "Виджет", exact: true }).click();
+  await expect(page.locator(".layer-list .layer-row").first()).toContainText("113 × 9");
+  await expect(page.getByLabel("Светлый индикатор")).toBeChecked();
+  const canvas = page.locator<HTMLCanvasElement>(".oled-stage canvas");
+  await expect.poll(async () => canvas.evaluate((element) => {
+    const context = element.getContext("2d")!;
+    return [context.getImageData(3, 14, 1, 1).data[0] > 200,
+      context.getImageData(115, 18, 1, 1).data[0] > 200,
+      context.getImageData(58, 18, 1, 1).data[0] > 200];
+  })).toEqual([true, true, true]);
+});
+
+test("OLED image and widgets reorder, keep image properties open, and delete the right-clicked layer", async ({
+  page,
+}) => {
+  await desktop(page);
+  await page.evaluate(() => {
+    const fixture = (window as any).__native.state.screen.project;
+    fixture.ImageFile = "C:/test/fixture.png";
+    fixture.Composition = 2;
+    fixture.Widgets.push({ ...fixture.Widgets[0], Id: "cpu", Kind: 4, X: 60 });
+    (window as any).__pushState();
+  });
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  const layerNames = page.locator(".layer-list .layer-row strong");
+  await expect(layerNames).toHaveText(["Загрузка CPU", "Часы", "Изображение"]);
+  await page.getByRole("button", { name: "Настройки изображения" }).click();
+  await expect(page.getByLabel("Масштабирование")).toBeVisible();
+  await page.evaluate(() => (window as any).__pushState());
+  await expect(page.getByLabel("Инвертировать цвета")).toBeVisible();
+
+  const rows = page.locator(".layer-list .layer-row");
+  await rows.filter({ hasText: "Часы" }).dragTo(rows.filter({ hasText: "Загрузка CPU" }), {
+    targetPosition: { x: 30, y: 5 },
+  });
+  await expect(layerNames).toHaveText(["Часы", "Загрузка CPU", "Изображение"]);
+  await rows.filter({ hasText: "Изображение" }).dragTo(rows.filter({ hasText: "Часы" }), {
+    targetPosition: { x: 30, y: 5 },
+  });
+  await expect(layerNames).toHaveText(["Изображение", "Часы", "Загрузка CPU"]);
+  await expect.poll(async () => (await requests(page, "screen.update")).at(-1)?.payload.project.ImageLayerIndex).toBe(2);
+
+  await rows.filter({ hasText: "Загрузка CPU" }).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Удалить слой" }).click();
+  await expect(layerNames).toHaveText(["Изображение", "Часы"]);
+  await expect(page.getByLabel("Инвертировать цвета")).toBeVisible();
+  await expect.poll(async () => (await requests(page, "screen.update")).at(-1)?.payload.project.ImageLayerIndex).toBe(1);
+  const update = (await requests(page, "screen.update")).at(-1);
+  expect(update.payload.project.Widgets.map((widget: { Id: string }) => widget.Id)).toEqual(["clock"]);
+});
+
 test("radio settings allow qualified edits and show unknown power without invented zero", async ({
   page,
 }) => {
@@ -428,7 +505,7 @@ test("radio settings allow qualified edits and show unknown power without invent
   );
 });
 
-for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8"]) {
+for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OLC"]) {
   test(`${revision} radio permits editor but blocks unqualified OLED upload and live`, async ({
     page,
   }) => {
@@ -447,11 +524,11 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8"]) {
       page.getByLabel("Обновлять в реальном времени"),
     ).toBeDisabled();
     await expect(
-      page.getByText(/Для 2.4G нужна OL9 и активный профиль 1/),
+      page.getByText(/Для 2\.4G нужна OL9, OLA или OLB и активный профиль 1/),
     ).toBeVisible();
     await page.locator(".language-control select").selectOption("en");
     await expect(
-      page.getByText(/2.4G requires OL9 and active profile 1/),
+      page.getByText(/2\.4G requires OL9, OLA or OLB and active profile 1/),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Upload to OLED", exact: true }),
@@ -460,31 +537,35 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8"]) {
   });
 }
 
-test("OL9 radio allows OLED only on active profile 1", async ({ page }) => {
-  await desktop(page);
-  await page.evaluate(() => {
-    const n = (window as any).__native;
-    n.state.device.connection = "radio";
-    n.state.device.firmware = "1.08 / OL9";
-    n.state.device.profile = 2;
-    (window as any).__pushState();
+for (const revision of ["OL9", "OLA", "OLB"]) {
+  test(`${revision} radio allows OLED only on active profile 1`, async ({
+    page,
+  }) => {
+    await desktop(page);
+    await page.evaluate((revision) => {
+      const n = (window as any).__native;
+      n.state.device.connection = "radio";
+      n.state.device.firmware = `1.08 / ${revision}`;
+      n.state.device.profile = 2;
+      (window as any).__pushState();
+    }, revision);
+    await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+    const upload = page.getByRole("button", { name: "На OLED", exact: true });
+    const live = page.getByLabel("Обновлять в реальном времени");
+    await expect(upload).toBeDisabled();
+    await expect(live).toBeDisabled();
+    await page.evaluate(() => {
+      (window as any).__native.state.device.profile = 1;
+      (window as any).__pushState();
+    });
+    await expect(upload).toBeEnabled();
+    await expect(live).toBeEnabled();
+    await upload.click();
+    expect(await requests(page, "screen.upload")).toHaveLength(1);
   });
-  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
-  const upload = page.getByRole("button", { name: "На OLED", exact: true });
-  const live = page.getByLabel("Обновлять в реальном времени");
-  await expect(upload).toBeDisabled();
-  await expect(live).toBeDisabled();
-  await page.evaluate(() => {
-    (window as any).__native.state.device.profile = 1;
-    (window as any).__pushState();
-  });
-  await expect(upload).toBeEnabled();
-  await expect(live).toBeEnabled();
-  await upload.click();
-  expect(await requests(page, "screen.upload")).toHaveLength(1);
-});
+}
 
-for (const revision of ["OL7", "OL8", "OL9"]) {
+for (const revision of ["OL7", "OL8", "OL9", "OLA", "OLB"]) {
   test(`${revision} USB permits a guarded control upload`, async ({
     page,
   }) => {

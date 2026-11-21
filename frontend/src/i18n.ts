@@ -99,8 +99,8 @@ export const english: Record<string, string> = {
   "Загрузка CPU": "CPU usage",
   "Загрузка GPU": "GPU usage",
   "Загрузка RAM": "RAM usage",
-  "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9 и активный профиль 1. Текущая прошивка:":
-    "OLED over USB requires OL4 or later. 2.4G requires OL9 and active profile 1. Current firmware:",
+  "Для OLED по USB нужна OL4 или новее. Для 2.4G нужна OL9, OLA или OLB и активный профиль 1. Текущая прошивка:":
+    "OLED over USB requires OL4 or later. 2.4G requires OL9, OLA or OLB and active profile 1. Current firmware:",
   "Заданное количество": "Repeat count",
   "Закрыть уведомление": "Dismiss notification",
   "Заменить изображение": "Replace image",
@@ -109,6 +109,11 @@ export const english: Record<string, string> = {
   "Запуск и поведение HUB": "HUB startup and behaviour",
   "Запускать HUB вместе с Windows": "Start HUB with Windows",
   "Заряд батареи": "Battery level",
+  "Индикатор батареи": "Battery gauge",
+  "Деление на каждые 10% заряда. При ширине 113 px каждое деление занимает 10 px.":
+    "One segment per 10% charge. At 113 px wide, each segment is 10 px wide.",
+  "Светлый индикатор": "Light indicator",
+  "Очищать фон под индикатором": "Clear background behind indicator",
   "Здесь будут ваши профили": "Your profiles will appear here",
   "Значения из памяти мыши · профиль": "Values read from the mouse · profile",
   "Изменение активного профиля или количества профилей примените отдельно кнопкой рядом с полем.":
@@ -140,6 +145,11 @@ export const english: Record<string, string> = {
   "Макрос сохранён локально": "Macro saved locally",
   Макросы: "Macros",
   Масштабирование: "Scaling",
+  "Меню слоя": "Layer menu",
+  "Настройки изображения": "Image settings",
+  "Положение и размер": "Position and size",
+  "Перетащите слой, чтобы изменить порядок. ПКМ открывает меню слоя.":
+    "Drag layers to reorder. Right-click a layer for its menu.",
   Модификаторы: "Modifiers",
   "Мои профили": "My profiles",
   Мышь: "Mouse",
@@ -497,12 +507,12 @@ export function oledStatus(value: string): string {
   if (locale.value !== "en") return value;
   const phrases: [string, string][] = [
     [
-      "OLED поддерживает USB с OL4 и новее и 2.4G с OL9 на профиле 1. Живые данные обновляются, пока HUB открыт.",
-      "OLED supports USB with OL4 or later and 2.4G with OL9 on profile 1. Live data updates while the HUB runs.",
+      "OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA или OLB на профиле 1. Живые данные обновляются, пока HUB открыт.",
+      "OLED supports USB with OL4 or later and 2.4G with OL9, OLA or OLB on profile 1. Live data updates while the HUB runs.",
     ],
     [
-      "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9 и активный профиль 1.",
-      "Check OLED compatibility. USB requires OL4 or later. 2.4G requires OL9 and active profile 1.",
+      "Проверьте совместимость OLED. Для USB нужна OL4 или новее, для 2.4G нужна OL9, OLA или OLB и активный профиль 1.",
+      "Check OLED compatibility. USB requires OL4 or later. 2.4G requires OL9, OLA or OLB and active profile 1.",
     ],
     ["Передача остановлена:", "Upload stopped:"],
     [

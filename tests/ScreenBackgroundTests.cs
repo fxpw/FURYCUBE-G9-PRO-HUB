@@ -6,6 +6,7 @@ using System.Web.Script.Serialization;
 using System.Reflection;
 using Furycube.G9.Screen;
 using Furycube.G9.Oled;
+using Furycube.G9.Telemetry;
 
 internal static class ScreenBackgroundTests {
     static int checks;
@@ -69,6 +70,56 @@ internal static class ScreenBackgroundTests {
             Check(radioFrames==2&&radioStatusRequests==0&&editor.IsLive,"radio live frames use cached DPI without status queries");
         }
         await RunResume(directory);
+        await RunRadioResume(directory);
+    }
+    static async Task RunRadioResume(string directory) {
+        var returned = DateTimeOffset.UtcNow.AddSeconds(15);
+        var sample = new TelemetrySnapshot { SampledAt=returned, BatterySampledAt=returned, RadioBatteryResumedAt=returned };
+        int manual = 0, guarded = 0;
+        byte[] lastSent = null;
+        Func<byte[],Task<string>> manualSend = pixels => {
+            manual++;
+            lastSent = (byte[])pixels.Clone();
+            return Task.FromResult("manual");
+        };
+        Func<byte[],Task<string>> guardedSend = pixels => {
+            Check(Same(pixels,lastSent),"radio return sends confirmed pixels, ignoring local edits");
+            guarded++;
+            if(guarded==3)throw new IOException("receiver write failed");
+            return Task.FromResult(guarded==1?null:"guarded");
+        };
+        using(var editor=new G9ScreenEditor(delegate{},manualSend,null,Path.Combine(directory,"radio-resume.json"),false,liveFrameSender:guardedSend)) {
+            editor.AllowDevice(true);
+            editor.AcceptProjectJson(TextProject("SENT"));
+            await editor.UploadCurrent();
+            var settling=DateTimeOffset.UtcNow;
+            await editor.RestoreAfterRadioGap(new TelemetrySnapshot {
+                SampledAt=settling,BatterySampledAt=settling,RadioBatteryResumedAt=settling
+            },true);
+            Check(guarded==0,"a return during OLED settling cannot trigger another transfer");
+            editor.AcceptProjectJson(TextProject("UNSENT"));
+            await editor.RestoreAfterRadioGap(sample,false);
+            sample.ReportedProfileId=2;
+            await editor.RestoreAfterRadioGap(sample,true);
+            sample.ReportedProfileId=1;
+            sample.SampledAt=returned.AddSeconds(10);
+            await editor.RestoreAfterRadioGap(sample,true);
+            Check(manual==1&&guarded==0,"desktop activity, wrong profile and stale telemetry block replay");
+            sample.BatterySampledAt=sample.SampledAt;
+            await editor.RestoreAfterRadioGap(sample,true);
+            Check(guarded==1&&!editor.IsLive,"input-deferred replay leaves static mode intact");
+            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.RestoreAfterRadioGap(sample,true);
+            Check(manual==1&&guarded==2,"deferred replay retries and completes once per radio return");
+            returned=returned.AddSeconds(20);
+            sample.SampledAt=returned;sample.BatterySampledAt=returned;sample.RadioBatteryResumedAt=returned;
+            await editor.RestoreAfterRadioGap(sample,true);
+            await editor.RestoreAfterRadioGap(sample,true);
+            Check(guarded==3,"receiver error does not retrigger every timer tick");
+            editor.SuspendDevice("USB selected");editor.AllowDevice();
+            await editor.RestoreAfterRadioGap(sample,true);
+            Check(guarded==3,"USB transport ignores radio return");
+        }
     }
     static async Task RunResume(string directory){
         string projectFile=Path.Combine(directory,"resume.json"),cacheFile=projectFile+".last-frame";

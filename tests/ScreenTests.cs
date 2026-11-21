@@ -106,6 +106,30 @@ internal static class ScreenTests {
         string hostile=Path.Combine(directory,"hostile.json");File.WriteAllText(hostile,"{\"Version\":1,\"Width\":120,\"Height\":28,\"ImageFile\":\"../private.png\",\"Composition\":0,\"ImageOptions\":{},\"Widgets\":[]}");
         bool rejected=false;try {ScreenProject.Load(hostile);}catch(InvalidDataException){rejected=true;}Check(rejected,"project cannot escape its asset directory");
     }
+    static void BatteryWidget() {
+        var widget=new ScreenWidget {Kind=WidgetKind.BatteryIndicator,X=3,Y=1,Width=WidgetRenderer.BatteryFullWidth,Height=9};
+        var background=new MonoFrame(120,12);
+        var context=new WidgetContext();
+        double[] chargeLevels={0,9,10,19,20,72,99,100};
+        foreach(double charge in chargeLevels) {
+            context.BatteryPercent=charge;
+            MonoFrame frame=WidgetRenderer.Render(background,new[]{widget},context);
+            int filledPixels=0;
+            for(int column=0;column<109;column++) {
+                bool lit=frame.GetPixel(widget.X+1+column,widget.Y+4);
+                if(lit)filledPixels++;
+                Check(lit==(column/11<(int)(charge/10)&&column%11<10),"battery draws only complete 10-pixel segments");
+            }
+            Check(filledPixels==(int)(charge/10)*10&&frame.GetPixel(115,5)&&!frame.GetPixel(116,5),"charge fill and terminal fit in the layer");
+        }
+        context.BatteryPercent=null;
+        MonoFrame unknown=WidgetRenderer.Render(background,new[]{widget},context);
+        Check(unknown.GetPixel(58,5)&&!unknown.GetPixel(4,5),"unknown charge uses a centered dash");
+        widget.Width=54;context.BatteryPercent=50;
+        MonoFrame compact=WidgetRenderer.Render(background,new[]{widget},context);
+        Check(compact.GetPixel(4,5)&&compact.GetPixel(56,5)&&!compact.GetPixel(57,5)&&!compact.GetPixel(46,5),
+            "compact layouts scale cells and keep the charge and terminal within the layer");
+    }
     static void PositionedImage(string directory) {
         string file=Path.Combine(directory,"layer.png");using(var bitmap=Solid(2,2,Color.White))bitmap.Save(file,ImageFormat.Png);
         var project=new ScreenProject {Width=4,Height=3,ImageFile=file,ImageX=2,ImageY=1,ImageWidth=2,ImageHeight=2,Composition=CompositionMode.Image};
@@ -117,9 +141,26 @@ internal static class ScreenTests {
         var canvas=new MonoFrame(3,3);var source=new MonoFrame(2,2);source.Fill(true);canvas.Blit(source,-1,-1);Check(Lit(canvas)==1&&canvas.GetPixel(0,0),"negative blit clips at the top-left boundary");
         canvas.Blit(source,8,8);Check(Lit(canvas)==1,"entirely outside blit has no effect");
     }
+    static void ImageLayerOrder(string directory) {
+        string image=Path.Combine(directory,"black-layer.png");
+        using(var bitmap=Solid(12,12,Color.Black))bitmap.Save(image,ImageFormat.Png);
+        var project=new ScreenProject {Width=24,Height=12,ImageFile=image,ImageWidth=12,ImageHeight=12,Composition=CompositionMode.ImageAndWidgets};
+        project.Widgets.Clear();
+        project.Widgets.Add(new ScreenWidget {Kind=WidgetKind.Text,Text="A",Width=12,Height=12});
+        project.Widgets.Add(new ScreenWidget {Kind=WidgetKind.Text,Text="B",X=12,Width=12,Height=12});
+        MonoFrame background=project.Render(null);
+        Check(Lit(background)>0,"legacy position draws image below the widgets");
+        project.ImageLayerIndex=1;
+        string file=Path.Combine(directory,"ordered","screen.json");project.Save(file);
+        var restored=ScreenProject.Load(file);
+        MonoFrame middle=restored.Render(null);
+        Check(restored.ImageLayerIndex==1&&Lit(middle)>0&&Lit(middle)<Lit(background),"saved middle image covers the lower widget");
+        for(int y=0;y<12;y++)for(int x=0;x<24;x++)
+            Check(middle.GetPixel(x,y)==(x>=12&&background.GetPixel(x,y)),"middle raster respects draw order");
+    }
     static int Main() {
         string directory=Path.Combine(Path.GetTempPath(),"G9ScreenTests-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
-        try {Packing();Preview();Conversion();Resize();Widgets();PortableProject(directory);PositionedImage(directory);Console.WriteLine("PASS "+assertions+" screen checks: pixel packing,28-row padding, preview, threshold/dither, fit/crop, widgets, portable projects and positioned image clipping");return 0;}
+        try {Packing();Preview();Conversion();Resize();Widgets();BatteryWidget();PortableProject(directory);PositionedImage(directory);ImageLayerOrder(directory);Console.WriteLine("PASS "+assertions+" screen checks: pixel packing,28-row padding, preview, threshold/dither, fit/crop, widgets, portable projects and positioned image clipping");return 0;}
         catch(Exception e){Console.Error.WriteLine("FAIL "+e);return 1;}
         finally {if(Directory.Exists(directory))Directory.Delete(directory,true);}
     }

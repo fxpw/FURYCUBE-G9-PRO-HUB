@@ -28,7 +28,7 @@ identified development mouse, not every device sold under the same name.
 | DG3 RF state display | Earlier diagnostic build: USB input recovered without a PC reboot after an approved Interception bypass and passed 9/9. Radio input also passed 9/9, but the version query timed out and the display showed 9000. See [DG3 diagnostic](docs/DG3-RADIO-DIAGNOSTIC.md). |
 | DG4 last-request diagnostic | Previous diagnostic build. USB and radio input passed 9/9. A complete settings read passed over radio after the client adopted asynchronous I/O. See [DG4 diagnostic](docs/DG4-RADIO-DIAGNOSTIC.md). |
 | OL9 radio OLED | The same frame appeared over USB and over 2.4 GHz with 56-byte feature calls. Radio input passed 9/9 and the settings matched the USB backup. The HUB enables this path on active profile 1. See the [candidate matrix](docs/RF-CANDIDATE-MATRIX.md). |
-| PC-side last-frame resume | Successful submissions are cached atomically with a checksum. Static frames restore without enabling live updates; live mode resumes rendering. Reconnect/restart/error cases are tested with fake transports; physical replay remains pending. |
+| PC-side last-frame resume | The HUB caches submitted frames with a checksum. Same-receiver replay of a static frame was confirmed after switching the development mouse off and back to 2.4 GHz. Restart and error handling also have simulated-transport coverage. |
 | Macro editor | Local authoring, recording and JSON import/export. Uploading new macros to the mouse is unfinished. |
 | Firmware recovery | Configuration backups exist; a complete installed-firmware dump and independent rollback remain unverified. |
 
@@ -41,7 +41,9 @@ automatically.
 
 The current receiver uses asynchronous feature reads. Settings queries
 use 134-byte prepare buffers, while OL9 OLED fragments use 56-byte feature
-calls. The tested 500 ms pacing takes about six seconds per radio frame.
+calls. Automatic radio updates and same-receiver restores use a 250 ms gap,
+which took about 3.2 seconds per frame in the hardware test. Manual radio
+uploads use the 500 ms gap and take about six seconds per frame.
 The radio DPI widget uses the sensor settings read at connection and passive
 DPI-stage updates from the mouse. See the [receiver transport results](docs/OEM-FIRST-RADIO-READ.md)
 and [OL9 carrier protocol](docs/OL9-CARRIER.md).
@@ -141,16 +143,21 @@ See the [settings inventory](docs/SETTINGS-PARITY.md) and
 
 ## OLED layouts
 
-![OLED layout editor with clock, DPI, CPU and RAM sample data](docs/images/editor.png)
+![OLED layout editor with a clock, text and a segmented battery indicator](docs/images/editor.png)
 
 The **OLED display** editor works on a **120 × 28 monochrome canvas**:
 
 - Import PNG/JPEG/BMP/GIF/TIFF; fit, crop or stretch; adjust threshold, dithering
   and inversion. GIF import uses one frame.
-- Add text, clocks, battery, numeric DPI or DPI-stage widgets, CPU/GPU usage,
-  RAM usage and available temperature readings.
+- Add text, clocks, battery percentage or a segmented battery icon, numeric DPI
+  or DPI stage, CPU/GPU usage, RAM usage and available temperature readings.
+  Each filled battery segment represents a full 10% of charge. The number of
+  pixels per segment scales with the layer width.
 - Drag a layer or its resize handle. X/Y, width, height and font size can also be
   changed independently with sliders and numeric fields.
+- Drag rows in **Layers** to change the stacking order of the image and widgets.
+  Right-click a row to remove that layer. Select the image layer to adjust its
+  fit, threshold, dithering and inversion.
 - Open/save portable JSON layouts with image assets, export PNG previews, and
   restore the last editor autosave.
 
@@ -171,15 +178,20 @@ Portable examples:
 | [Clock, DPI and system](examples/screens/clock-dpi-system.g9screen.json) | Clock, numeric DPI, CPU and RAM |
 | [Positioned image](examples/screens/positioned-image.g9screen.json) | An 84 × 20 image at X=18, Y=4, with its bundled asset |
 
-**OLED images require OL4 or later over USB, or OL9 with active profile 1 over
-2.4 GHz.** Physical uploads have been confirmed on the development mouse over
-both connections. Native OL2/OL3 image writes are disabled after a reproduced
-long-packet assembly failure.
+**OLED image uploads are available with OL4 through OL9, OLA, or OLB over USB.
+For 2.4 GHz, use OL9, OLA, or OLB with active profile 1.** Full-frame delivery
+over both connections was confirmed with OL9. OLB input passed separately
+over USB and 2.4 GHz. Visible OLED delivery and input timing during the OLB
+radio test series still need verification. The HUB currently uploads full
+frames. Native OL2/OL3 image writes are disabled after a reproduced long-packet
+assembly failure.
 
-Native redraws, sleep and connection changes can replace or clear a custom
-image. The HUB can resend its cached frame after reconnecting. Keeping a frame
-through power loss on the mouse itself remains unverified. Live widgets require
-a running HUB. Errors stop updates without repeating the failed frame.
+The HUB can resend its cached frame when the connection changes. If the 2.4 GHz
+receiver stays plugged in, the HUB watches for the mouse's battery reports to
+resume after a gap of at least nine seconds and restores the last static frame
+after desktop input pauses. The embedded firmware build restores a compiled
+snapshot after power loss. Saving a new layout to the mouse from the editor
+remains open. Host-driven live widgets require a running HUB.
 See [OL4 transport](docs/OLED-USB-CHUNKS.md),
 [stock redraw behaviour](docs/OLED-REDRAW.md) and the
 [experimental retention design](docs/OLED-RETENTION-DESIGN.md).
