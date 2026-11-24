@@ -8,7 +8,7 @@ using Furycube.G9.Bindings;
 
 // Pure bridge boundary: no HID, process, registry or file-write APIs.
 internal static class G9WebApi {
-    static readonly HashSet<string> Methods=new HashSet<string>(new[]{"app.state","app.preferences","app.exit","device.scan","device.assign","device.settings","screen.update","screen.chooseImage","screen.open","screen.save","screen.exportPng","screen.upload","screen.live","macros.save","macros.delete","macros.import","macros.export","profiles.save","profiles.open","profiles.rename","profiles.delete","profiles.import","profiles.export"},StringComparer.Ordinal);
+    static readonly HashSet<string> Methods=new HashSet<string>(new[]{"app.state","app.preferences","app.exit","device.scan","device.assign","device.settings","screen.update","screen.chooseImage","screen.open","screen.save","screen.exportPng","screen.upload","screen.live","screen.schedule","macros.save","macros.delete","macros.import","macros.export","profiles.save","profiles.open","profiles.rename","profiles.delete","profiles.import","profiles.export"},StringComparer.Ordinal);
     internal sealed class Request {internal string Id,Method;internal Dictionary<string,object> Payload;}
     internal static JavaScriptSerializer Json() {return new JavaScriptSerializer{MaxJsonLength=4194304,RecursionLimit=40};}
     internal static bool TrustedOrigin(string source) {Uri uri;return Uri.TryCreate(source,UriKind.Absolute,out uri)&&uri.Scheme=="https"&&uri.Host=="g9.local"&&uri.IsDefaultPort&&String.IsNullOrEmpty(uri.UserInfo);}

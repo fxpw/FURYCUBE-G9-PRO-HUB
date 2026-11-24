@@ -224,7 +224,8 @@ internal sealed partial class G9Hub : Form {
     bool startupReadStarted;
     readonly CheckBox resumeOled=new CheckBox {Text="Возобновлять обновление OLED при запуске",AutoSize=true};
     readonly G9BackgroundPreferences backgroundPreferences=new G9BackgroundPreferences(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","hub-background.json"));
-    readonly NotifyIcon tray=new NotifyIcon {Icon=SystemIcons.Application,Text="FURYCUBE G9 PRO HUB"};
+    readonly Icon hubIcon=System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+    readonly NotifyIcon tray=new NotifyIcon {Text="FURYCUBE G9 PRO HUB"};
     readonly System.Windows.Forms.Timer backgroundTimer=new System.Windows.Forms.Timer {Interval=250};
     readonly G9DeviceChangeTracker targetTracker=new G9DeviceChangeTracker();
     readonly Func<bool> showRequested;
@@ -244,6 +245,7 @@ internal sealed partial class G9Hub : Form {
         startMinimized=minimized;
         showRequested=restoreRequested;
         root = path; Text = "FURYCUBE G9 PRO HUB"; Width = 1120; Height = 760; MinimumSize = new Size(960,650); StartPosition = FormStartPosition.CenterScreen;
+        Icon=hubIcon;tray.Icon=hubIcon??SystemIcons.Application;
         Font = new Font("Segoe UI", 10); Padding = new Padding(16);
         var description = new Label { Text = "Проверка устройства и локальная подготовка исправлений прошивки.", Height = 35, Dock = DockStyle.Top };
         status.Text = "Программа готова. Назначения сохраняются в мышь; для картинок OLED нужны OL4 и USB-кабель.";
@@ -311,7 +313,11 @@ internal sealed partial class G9Hub : Form {
         screenEditor=new G9ScreenEditor(Append,pixels=>SendFrame(pixels,false),ReadRuntimeStatus,
             savedEditorFile:String.IsNullOrEmpty(trialLayout)?null:trialLayout,
             cachedRadioDpiReader:ReadCachedRadioDpi,liveFrameSender:pixels=>SendFrame(pixels,true),
-            liveDeltaSender:pixels=>SendFrame(pixels,true,partial:true));
+            liveDeltaSender:pixels=>SendFrame(pixels,true,partial:true),saveLiveSchedule:backgroundPreferences.SetOledSchedule);
+        try {
+            int seconds;bool waitForIdle;backgroundPreferences.ReadOledSchedule(out seconds,out waitForIdle);
+            screenEditor.SetLiveSchedule(seconds,waitForIdle,persist:false);
+        }catch(Exception error){Append("Не удалось прочитать расписание OLED: "+error.Message);}
         screenEditor.SuspendDevice("Чтение подключённой мыши… OLED пока приостановлен.");
         var screen = new TabPage("Экран и виджеты"); screen.Controls.Add(screenEditor);
         tabs.TabPages.Add(assignments); tabs.TabPages.Add(screen); tabs.TabPages.Add(mouse); tabs.SelectedIndex=0; Controls.Add(tabs);
@@ -537,6 +543,7 @@ internal sealed partial class G9Hub : Form {
             tray.Visible=false;if(tray.ContextMenuStrip!=null)tray.ContextMenuStrip.Dispose();tray.Dispose();
             var current=System.Threading.Interlocked.Exchange(ref oledWorker,null);
             if(current!=null)current.Dispose();
+            if(hubIcon!=null)hubIcon.Dispose();
         }
         base.Dispose(disposing);
     }

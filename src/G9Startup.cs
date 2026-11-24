@@ -118,6 +118,28 @@ internal sealed class G9BackgroundPreferences {
     internal void SetResumeOled(bool enabled) {
         var data=Read();if((bool)data["resumeOled"]==enabled && File.Exists(path))return;
         data["resumeOled"]=enabled;
+        Save(data);
+    }
+    internal void ReadOledSchedule(out int seconds,out bool waitForIdle) {
+        var data=Read();object interval,idle;
+        seconds=1;waitForIdle=false;
+        if(data.TryGetValue("oledIntervalSeconds",out interval)){
+            if(!(interval is int)||(int)interval<1||(int)interval>86400)throw new InvalidDataException("Неверный интервал обновления OLED.");
+            seconds=(int)interval;
+        }
+        if(data.TryGetValue("oledWaitForIdle",out idle)){
+            if(!(idle is bool))throw new InvalidDataException("Неверная настройка ожидания паузы для OLED.");
+            waitForIdle=(bool)idle;
+        }
+    }
+    internal void SetOledSchedule(int seconds,bool waitForIdle) {
+        if(seconds<1||seconds>86400)throw new ArgumentOutOfRangeException("seconds");
+        var data=Read();
+        data["oledIntervalSeconds"]=seconds;
+        data["oledWaitForIdle"]=waitForIdle;
+        Save(data);
+    }
+    void Save(Dictionary<string,object> data) {
         string directory=Path.GetDirectoryName(path);Directory.CreateDirectory(directory);
         string temporary=path+"."+Guid.NewGuid().ToString("N")+".tmp";
         try {

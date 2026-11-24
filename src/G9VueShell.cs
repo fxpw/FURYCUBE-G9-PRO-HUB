@@ -180,6 +180,10 @@ internal sealed partial class G9Hub {
         if(method=="screen.update") {object value;if(!payload.TryGetValue("project",out value))throw new InvalidDataException("Нет макета.");screenEditor.AcceptProjectJson(G9WebApi.Json().Serialize(value));return screenEditor.VueState();}
         if(method=="screen.upload"){await screenEditor.VueUpload();return VueState();}
         if(method=="screen.live"){if(G9WebApi.Flag(payload,"enabled"))await screenEditor.VueUpload(true);else screenEditor.StopLive();return VueState();}
+        if(method=="screen.schedule"){
+            screenEditor.SetLiveSchedule(G9WebApi.Number(payload,"intervalSeconds",1,86400),G9WebApi.Flag(payload,"waitForIdle"));
+            return VueState();
+        }
         if(method.StartsWith("screen.",StringComparison.Ordinal)){screenEditor.VueDialog(method,vueEnglish);return VueState();}
         if(method.StartsWith("macros.",StringComparison.Ordinal)){VueMacroOperation(method,payload);return VueState();}
         if(method.StartsWith("profiles.",StringComparison.Ordinal)){VueProfileOperation(method,payload);return VueState();}

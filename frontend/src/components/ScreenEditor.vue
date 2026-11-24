@@ -62,6 +62,22 @@ const frameSource = computed(() =>
       ? png.value
       : `data:image/png;base64,${png.value}`,
 );
+const intervalOptions = [
+  [1, "Каждую секунду"],
+  [5, "Каждые 5 секунд"],
+  [15, "Каждые 15 секунд"],
+  [30, "Каждые 30 секунд"],
+  [60, "Каждую минуту"],
+  [300, "Каждые 5 минут"],
+  [900, "Каждые 15 минут"],
+  [1800, "Каждые 30 минут"],
+  [3600, "Каждый час"],
+] as const;
+const editCustomInterval = ref(false);
+const scheduleInterval = computed(() => state.value.screen.intervalSeconds ?? 1);
+const customInterval = computed(
+  () => editCustomInterval.value || !intervalOptions.some(([seconds]) => seconds === scheduleInterval.value),
+);
 const supportsUpload = computed(
   () =>
     isDesktop &&
@@ -160,6 +176,33 @@ async function liveChanged(event: Event) {
   const input = event.target as HTMLInputElement;
   await live(input.checked);
   input.checked = state.value.screen.live;
+}
+async function intervalChanged(event: Event) {
+  const select = event.target as HTMLSelectElement;
+  editCustomInterval.value = select.value === "custom";
+  if (!editCustomInterval.value)
+    await run("screen.schedule", {
+      intervalSeconds: Number(select.value),
+      waitForIdle: state.value.screen.waitForIdle,
+    });
+  select.value = customInterval.value ? "custom" : String(scheduleInterval.value);
+}
+async function customIntervalChanged(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.checkValidity())
+    await run("screen.schedule", {
+      intervalSeconds: input.valueAsNumber,
+      waitForIdle: state.value.screen.waitForIdle,
+    });
+  input.value = String(scheduleInterval.value);
+}
+async function idleChanged(event: Event) {
+  const input = event.target as HTMLInputElement;
+  await run("screen.schedule", {
+    intervalSeconds: scheduleInterval.value,
+    waitForIdle: input.checked,
+  });
+  input.checked = state.value.screen.waitForIdle;
 }
 function addWidget() {
   const widget = newWidget(addKind.value);
@@ -291,14 +334,18 @@ function geometry() {
       y: project.value.ImageY,
       width: project.value.ImageWidth || project.value.Width,
       height: project.value.ImageHeight || project.value.Height,
+      rotation: 0,
     };
   const w = activeWidget.value;
   return w
-    ? { x: w.X, y: w.Y, width: w.Width, height: w.Height }
-    : { x: 0, y: 0, width: 1, height: 1 };
+    ? { x: w.X, y: w.Y, width: w.Width, height: w.Height, rotation: w.Rotation ?? 0 }
+    : { x: 0, y: 0, width: 1, height: 1, rotation: 0 };
+}
+function setRotation(value: number) {
+  if (activeWidget.value) activeWidget.value.Rotation = Math.round(value);
 }
 function setGeometry(key: "x" | "y" | "width" | "height", value: number) {
-  const v = Math.round(value);
+  const v = Math.max(-4096, Math.min(4096, Math.round(value)));
   if (imageSelected.value) {
     const names = {
       x: "ImageX",
@@ -322,6 +369,7 @@ function rectStyle(layer: ScreenWidget | null) {
     top: `${(100 * (layer ? layer.Y : p.ImageY)) / p.Height}%`,
     width: `${(100 * (layer ? layer.Width : p.ImageWidth || p.Width)) / p.Width}%`,
     height: `${(100 * (layer ? layer.Height : p.ImageHeight || p.Height)) / p.Height}%`,
+    transform: layer?.Rotation ? `rotate(${layer.Rotation}deg)` : undefined,
   };
 }
 let drag: {
@@ -332,6 +380,7 @@ let drag: {
   startY: number;
   width: number;
   height: number;
+  rotation: number;
   resize: boolean;
   target: HTMLElement;
 } | null = null;
@@ -350,6 +399,7 @@ function pointerDown(event: PointerEvent, id: string, resize = false) {
     startY: current.y,
     width: current.width,
     height: current.height,
+    rotation: current.rotation,
     resize,
     target,
   };
@@ -357,25 +407,26 @@ function pointerDown(event: PointerEvent, id: string, resize = false) {
 }
 function pointerMove(event: PointerEvent) {
   if (!drag || drag.id !== event.pointerId || !stage.value) return;
-  const box = stage.value.getBoundingClientRect(),
-    dx = Math.round(
-      ((event.clientX - drag.x) * project.value.Width) / box.width,
-    ),
-    dy = Math.round(
-      ((event.clientY - drag.y) * project.value.Height) / box.height,
-    );
+  const box = stage.value.getBoundingClientRect();
+  const dx = ((event.clientX - drag.x) * project.value.Width) / box.width;
+  const dy = ((event.clientY - drag.y) * project.value.Height) / box.height;
   if (drag.resize) {
-    setGeometry(
-      "width",
-      Math.max(1, Math.min(project.value.Width - drag.startX, drag.width + dx)),
-    );
-    setGeometry(
-      "height",
-      Math.max(
-        1,
-        Math.min(project.value.Height - drag.startY, drag.height + dy),
-      ),
-    );
+    const angle = (drag.rotation * Math.PI) / 180;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    const maxWidth = drag.rotation ? project.value.Width : project.value.Width - drag.startX;
+    const maxHeight = drag.rotation ? project.value.Height : project.value.Height - drag.startY;
+    const width = Math.max(1, Math.min(maxWidth, drag.width + Math.round(dx * cos + dy * sin)));
+    const height = Math.max(1, Math.min(maxHeight, drag.height + Math.round(dy * cos - dx * sin)));
+    setGeometry("width", width);
+    setGeometry("height", height);
+    if (drag.rotation) {
+      // Hold the opposite corner in place as the widget's centre shifts.
+      const dw = width - drag.width;
+      const dh = height - drag.height;
+      setGeometry("x", drag.startX + ((cos - 1) * dw - sin * dh) / 2);
+      setGeometry("y", drag.startY + (sin * dw + (cos - 1) * dh) / 2);
+    }
   } else {
     setGeometry(
       "x",
@@ -452,6 +503,13 @@ function drawDemo() {
     if (project.value.Composition === 0) return;
     for (const w of project.value.Widgets) {
       context.save();
+      if (w.Rotation) {
+        const centerX = w.X + w.Width / 2;
+        const centerY = w.Y + w.Height / 2;
+        context.translate(centerX, centerY);
+        context.rotate((w.Rotation * Math.PI) / 180);
+        context.translate(-centerX, -centerY);
+      }
       context.beginPath();
       context.rect(w.X, w.Y, w.Width, w.Height);
       context.clip();
@@ -517,7 +575,7 @@ onDeactivated(closeLayerMenu);
           :disabled="busy || !supportsUpload"
           @change="liveChanged($event)"
         /><span class="live-dot" :class="{ enabled: state.screen.live }" />{{
-          t("Обновлять в реальном времени")
+          t("Автообновление OLED")
         }}</label
       ><button
         class="button primary"
@@ -527,6 +585,43 @@ onDeactivated(closeLayerMenu);
         <AppIcon name="upload" :size="16" />{{ t("На OLED") }}
       </button>
     </div>
+  </div>
+  <div class="toolbar-group oled-schedule">
+    <label class="checkbox">
+      {{ t("Интервал обновления") }}
+      <select
+        :value="customInterval ? 'custom' : scheduleInterval"
+        :disabled="busy || !isDesktop"
+        @change="intervalChanged($event)"
+      >
+        <option v-for="[seconds, label] in intervalOptions" :key="seconds" :value="seconds">
+          {{ t(label) }}
+        </option>
+        <option value="custom">{{ t("Свой интервал") }}</option>
+      </select>
+    </label>
+    <label v-if="customInterval" class="checkbox">
+      {{ t("Интервал в секундах") }}
+      <input
+        type="number"
+        :value="scheduleInterval"
+        :disabled="busy || !isDesktop"
+        min="1"
+        max="86400"
+        step="1"
+        required
+        @change="customIntervalChanged($event)"
+      />
+    </label>
+    <label class="checkbox">
+      <input
+        type="checkbox"
+        :checked="state.screen.waitForIdle"
+        :disabled="busy || !isDesktop"
+        @change="idleChanged($event)"
+      />
+      {{ t("Ждать паузы во вводе") }}
+    </label>
   </div>
   <div
     v-if="isDesktop && state.device.connected && !supportsUpload"
@@ -800,15 +895,15 @@ onDeactivated(closeLayerMenu);
           <RangeField
             :label="t('По горизонтали · X')"
             :model-value="geometry().x"
-            :min="0"
-            :max="project.Width - 1"
+            :min="Math.min(0, geometry().x)"
+            :max="Math.max(project.Width - 1, geometry().x)"
             unit="px"
             @update:model-value="setGeometry('x', $event)"
           /><RangeField
             :label="t('По вертикали · Y')"
             :model-value="geometry().y"
-            :min="0"
-            :max="project.Height - 1"
+            :min="Math.min(0, geometry().y)"
+            :max="Math.max(project.Height - 1, geometry().y)"
             unit="px"
             @update:model-value="setGeometry('y', $event)"
           /><RangeField
@@ -825,6 +920,14 @@ onDeactivated(closeLayerMenu);
             :max="project.Height"
             unit="px"
             @update:model-value="setGeometry('height', $event)"
+          /><RangeField
+            v-if="activeWidget"
+            :label="t('Поворот виджета')"
+            :model-value="activeWidget.Rotation ?? 0"
+            :min="0"
+            :max="359"
+            unit="°"
+            @update:model-value="setRotation"
           />
         </div>
         <hr v-if="activeWidget" />

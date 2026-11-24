@@ -37,6 +37,7 @@ export interface ScreenWidget {
   Y: number;
   Width: number;
   Height: number;
+  Rotation?: number;
   Text: string;
   Format: string;
   FontSize: number;
@@ -71,6 +72,8 @@ export interface ScreenState {
   pngBase64: string;
   status: string;
   live: boolean;
+  intervalSeconds: number;
+  waitForIdle: boolean;
   widgetNames: string[];
 }
 export type MacroStep =
@@ -152,6 +155,7 @@ export function newWidget(kind = 0): ScreenWidget {
     Y: 0,
     Width: 60,
     Height: 12,
+    Rotation: 0,
     Text: "G9 PRO",
     Format: "HH:mm",
     FontSize: 9,
@@ -203,6 +207,8 @@ export function emptyState(): AppState {
       pngBase64: "",
       status: "",
       live: false,
+      intervalSeconds: 1,
+      waitForIdle: false,
       widgetNames: widgetLabels,
     },
     macros: [],

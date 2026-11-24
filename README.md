@@ -152,8 +152,11 @@ The **OLED display** editor works on a **120 × 28 monochrome canvas**:
   restore the last editor autosave.
 
 Use **+ Image** or **+ Widget**, adjust the layout, then choose **Upload to OLED**.
-**Update live** sends ongoing clock and metric updates. CPU/RAM use Windows APIs;
-optional GPU/temperature sources use existing local drivers or sensor services.
+**Auto-update OLED** sends clock and metric updates at the selected **Update
+interval**. Choose a preset or enter a custom interval from 1 second to 24 hours.
+With **Wait until input is idle** enabled, a due update waits for the next break
+in Windows input. Both settings are saved in the HUB. CPU/RAM use Windows APIs.
+Optional GPU and temperature sources use existing local drivers or sensor services.
 Unavailable values show a dash. `DPI#` is a stage number. The numeric DPI
 widget uses device status over USB and the read-back DPI table over 2.4 GHz.
 On 2.4 GHz, the HUB waits for a break in Windows input before starting a

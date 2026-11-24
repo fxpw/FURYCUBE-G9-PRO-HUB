@@ -165,6 +165,8 @@ function fixture(): AppState {
       pngBase64: "",
       status: "Офлайн-тест: устройство не используется",
       live: false,
+      intervalSeconds: 1,
+      waitForIdle: false,
       widgetNames: [],
     },
     macros: [
@@ -216,6 +218,10 @@ async function desktop(page: Page) {
         }
         if (request.method === "screen.live")
           native.state.screen.live = request.payload.enabled;
+        if (request.method === "screen.schedule") {
+          native.state.screen.intervalSeconds = request.payload.intervalSeconds;
+          native.state.screen.waitForIdle = request.payload.waitForIdle;
+        }
         if (request.method === "device.settings") {
           for (const change of request.payload.changes) {
             const field = native.state.settings!.fields.find(
@@ -392,7 +398,7 @@ test("OLED deletion refreshes native preview after enabling live with no pending
 }) => {
   await desktop(page);
   await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
-  await page.getByLabel("Обновлять в реальном времени").check();
+  await page.getByLabel("Автообновление OLED").check();
   await expect.poll(async () => (await requests(page, "screen.live")).length).toBe(1);
   await page.getByRole("button", { name: "Удалить выбранный слой" }).click();
   await expect(page.locator(".layer-list .layer-row")).toHaveCount(0);
@@ -401,6 +407,35 @@ test("OLED deletion refreshes native preview after enabling live with no pending
   expect(update.payload.project.Widgets).toEqual([]);
   await expect(page.locator(".oled-stage img")).toHaveJSProperty("naturalWidth", 1);
   expect(await requests(page, "screen.upload")).toHaveLength(0);
+});
+
+test("OLED interval and idle controls save separately from live mode", async ({ page }) => {
+  await desktop(page);
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  const interval = page.getByRole("combobox", { name: "Интервал обновления", exact: true });
+  const idle = page.getByLabel("Ждать паузы во вводе");
+  await interval.selectOption("60");
+  await idle.check();
+  await interval.selectOption("3600");
+  await expect.poll(async () => (await requests(page, "screen.schedule")).at(-1)?.payload).toEqual({
+    intervalSeconds: 3600,
+    locale: "ru",
+    waitForIdle: true,
+  });
+  await interval.selectOption("custom");
+  const custom = page.getByRole("spinbutton", { name: "Интервал в секундах" });
+  await custom.fill("75");
+  await custom.blur();
+  await expect.poll(async () => (await requests(page, "screen.schedule")).at(-1)?.payload).toEqual({
+    intervalSeconds: 75,
+    locale: "ru",
+    waitForIdle: true,
+  });
+  await expect(page.getByLabel("Автообновление OLED")).not.toBeChecked();
+  expect(await requests(page, "screen.live")).toHaveLength(0);
+  await page.locator(".language-control select").selectOption("en");
+  await expect(page.getByRole("spinbutton", { name: "Interval in seconds" })).toHaveValue("75");
+  await expect(page.getByLabel("Wait until input is idle")).toBeChecked();
 });
 
 test("OLED adds a full-width battery indicator with a silhouette in browser preview", async ({
@@ -521,7 +556,7 @@ for (const revision of ["OL4", "OL5", "OL6", "OL7", "OL8", "OLC"]) {
       page.getByRole("button", { name: "На OLED", exact: true }),
     ).toBeDisabled();
     await expect(
-      page.getByLabel("Обновлять в реальном времени"),
+      page.getByLabel("Автообновление OLED"),
     ).toBeDisabled();
     await expect(
       page.getByText(/Для 2\.4G нужна OL9, OLA, OLB, OLD или OLE и активный профиль 1/),
@@ -551,7 +586,7 @@ for (const revision of ["OL9", "OLA", "OLB", "OLD", "OLE"]) {
     }, revision);
     await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
     const upload = page.getByRole("button", { name: "На OLED", exact: true });
-    const live = page.getByLabel("Обновлять в реальном времени");
+    const live = page.getByLabel("Автообновление OLED");
     await expect(upload).toBeDisabled();
     await expect(live).toBeDisabled();
     await page.evaluate(() => {
@@ -663,6 +698,47 @@ test("OLED pointer drag and corner resize update independent layer geometry", as
     Y: 3,
     Width: 60,
     Height: 14,
+  });
+});
+
+test("OLED rotates the selection and resizes it along the widget axes", async ({ page }) => {
+  await desktop(page);
+  await page.getByRole("button", { name: "Экран OLED", exact: true }).click();
+  const number = (label: string) => page.getByRole("spinbutton", { name: label, exact: true });
+  const set = async (label: string, value: string) => {
+    const input = number(label);
+    await input.fill(value);
+    await input.press("Tab");
+  };
+  await expect(number("Поворот виджета")).toHaveValue("0");
+  await set("По горизонтали · X", "30");
+  await set("По вертикали · Y", "6");
+  await set("Ширина", "12");
+  await set("Высота", "8");
+  await set("Поворот виджета", "90");
+
+  const layer = page.locator(".layer-rect.selected");
+  await expect(layer).toHaveCSS("transform", "matrix(0, 1, -1, 0, 0, 0)");
+  const stage = (await page.locator(".oled-stage").boundingBox())!;
+  const handle = (await layer.locator(".resize-handle").boundingBox())!;
+  const x = handle.x + handle.width / 2;
+  const y = handle.y + handle.height / 2;
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x, y + (4 * stage.height) / 28, { steps: 3 });
+  await page.mouse.up();
+  await expect(number("Ширина")).toHaveValue("16");
+  await expect(number("Высота")).toHaveValue("8");
+
+  await set("Поворот виджета", "37");
+  await page.getByRole("button", { name: "На OLED", exact: true }).click();
+  const updates = await requests(page, "screen.update");
+  expect(updates.at(-1).payload.project.Widgets[0]).toMatchObject({
+    X: 28,
+    Y: 8,
+    Width: 16,
+    Height: 8,
+    Rotation: 37,
   });
 });
 

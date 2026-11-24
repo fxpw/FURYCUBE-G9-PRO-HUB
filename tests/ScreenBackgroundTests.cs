@@ -73,6 +73,45 @@ internal static class ScreenBackgroundTests {
         await RunRadioResume(directory);
         await RunRadioStartupResume(directory);
         await RunPartialLive(directory);
+        await RunLiveSchedule(directory);
+    }
+    static async Task RunLiveSchedule(string directory) {
+        var now=TimeSpan.Zero;
+        int frames=0,manual=0;
+        bool defer=false;
+        using(var editor=new G9ScreenEditor(delegate{},pixels=>{manual++;return Task.FromResult("manual");},
+            savedEditorFile:Path.Combine(directory,"schedule.json"),backgroundServices:false,
+            liveFrameSender:pixels=>Task.FromResult("full"),
+            liveDeltaSender:pixels=>{frames++;return Task.FromResult(defer?null:"confirmed");},elapsed:()=>now)){
+            editor.AllowDevice(true);
+            editor.SetLiveSchedule(60,false);
+            await editor.ResumeLive();
+            Check(frames==1,"enabling live starts the first frame");
+            now=TimeSpan.FromSeconds(59);
+            await editor.CheckLiveUpdate(true);
+            Check(frames==1,"idle before deadline does not start a frame");
+            now=TimeSpan.FromSeconds(60);
+            await editor.CheckLiveUpdate(false);
+            Check(frames==2,"due frame may update during input with idle option off");
+            editor.SetLiveSchedule(3600,true);
+            now=TimeSpan.FromSeconds(3659);
+            await editor.CheckLiveUpdate(true);
+            Check(frames==2,"hourly interval uses the last confirmed update");
+            now=TimeSpan.FromSeconds(3660);
+            await editor.CheckLiveUpdate(false);
+            Check(frames==2,"due frame waits during input with idle option on");
+            await editor.UploadCurrent();
+            Check(manual==1,"manual upload bypasses the background schedule");
+            now+=TimeSpan.FromSeconds(3);defer=true;
+            await editor.CheckLiveUpdate(true);
+            Check(frames==3,"due frame starts at the first eligible idle tick");
+            defer=false;now+=TimeSpan.FromSeconds(1);
+            await editor.CheckLiveUpdate(true);
+            Check(frames==4,"unconfirmed radio frame remains due at the next tick");
+            now+=TimeSpan.FromSeconds(1);
+            await editor.CheckLiveUpdate(true);
+            Check(frames==4,"confirmation starts the next interval");
+        }
     }
     static async Task RunPartialLive(string directory) {
         int manual=0, guard=0, partial=0;

@@ -640,6 +640,14 @@ input[type="color"] {
   align-items: center;
   gap: 8px;
 }
+.oled-schedule {
+  flex-wrap: wrap;
+  gap: 10px 20px;
+  margin-bottom: 16px;
+}
+.oled-schedule select, .oled-schedule input[type="number"] {
+  width: auto;
+}
 .range-field {
   display: block;
   margin-bottom: 18px;

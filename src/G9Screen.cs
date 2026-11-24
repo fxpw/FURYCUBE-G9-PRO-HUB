@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Globalization;
@@ -137,6 +138,7 @@ namespace Furycube.G9.Screen {
         public int Y {get;set;}
         public int Width {get;set;}
         public int Height {get;set;}
+        public int Rotation {get;set;}
         public string Text {get;set;}
         public string Format {get;set;}
         public float FontSize {get;set;}
@@ -145,8 +147,14 @@ namespace Furycube.G9.Screen {
         public bool ClearBackground {get;set;}
         public bool ShowLabel {get;set;}
         public ScreenWidget() {Id=Guid.NewGuid().ToString("N");Width=60;Height=12;FontSize=9;Lit=true;ShowLabel=true;Text="Text";Format="HH:mm";}
+        internal Matrix CreateRotationTransform(RectangleF bounds) {
+            var transform=new Matrix();
+            transform.RotateAt(Rotation,new PointF(bounds.X+bounds.Width/2,bounds.Y+bounds.Height/2));
+            return transform;
+        }
         public void Validate() {
             if(!Enum.IsDefined(typeof(WidgetKind),Kind)||Width<1||Height<1||Width>4096||Height>4096||X < -4096||X>4096||Y < -4096||Y>4096||float.IsNaN(FontSize)||float.IsInfinity(FontSize)||FontSize<4||FontSize>256)throw new InvalidDataException("Invalid widget geometry, kind or font size");
+            if(Rotation<0||Rotation>=360)throw new InvalidDataException("Widget rotation must be between 0 and 359 degrees");
             if(Text!=null&&Text.Length>4096)throw new InvalidDataException("Widget text is too long");
             if(Format!=null&&Format.Length>128)throw new InvalidDataException("Widget clock format is too long");
         }
@@ -226,13 +234,15 @@ namespace Furycube.G9.Screen {
             using(Bitmap canvas=background.ToBitmap()) {
                 using(Graphics graphics=Graphics.FromImage(canvas)) {
                     graphics.TextRenderingHint=TextRenderingHint.SingleBitPerPixelGridFit;
-                    graphics.SmoothingMode=System.Drawing.Drawing2D.SmoothingMode.None;
+                    graphics.SmoothingMode=SmoothingMode.None;
                     foreach(ScreenWidget widget in widgets) {
                         if(widget==null)throw new InvalidDataException("Null widget");widget.Validate();
                         Rectangle bounds=new Rectangle(widget.X,widget.Y,widget.Width,widget.Height);
                         var state=graphics.Save();
                         try {
-                            graphics.SetClip(bounds,System.Drawing.Drawing2D.CombineMode.Intersect);
+                            if(widget.Rotation!=0)
+                                using(var transform=widget.CreateRotationTransform(bounds))graphics.Transform=transform;
+                            graphics.SetClip(bounds,CombineMode.Intersect);
                             if(widget.ClearBackground)graphics.FillRectangle(widget.Lit?Brushes.Black:Brushes.White,bounds);
                             Brush ink=widget.Lit?Brushes.White:Brushes.Black;
                             if(widget.Kind==WidgetKind.BatteryIndicator) {

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using Furycube.G9.Screen;
 using ConvertImage=Furycube.G9.Screen.ImageConverter;
 
@@ -130,6 +132,37 @@ internal static class ScreenTests {
         Check(compact.GetPixel(4,5)&&compact.GetPixel(56,5)&&!compact.GetPixel(57,5)&&!compact.GetPixel(46,5),
             "compact layouts scale cells and keep the charge and terminal within the layer");
     }
+    static void RotatedWidget(string directory) {
+        var widget=new ScreenWidget {Kind=WidgetKind.BatteryIndicator,X=12,Y=18,Width=18,Height=8,ClearBackground=true};
+        var context=new WidgetContext {BatteryPercent=60};
+        var background=new MonoFrame(44,44);
+        background.Fill(true);
+        MonoFrame flat=WidgetRenderer.Render(background,new[]{widget},context);
+        widget.Rotation=90;
+        MonoFrame turned=WidgetRenderer.Render(background,new[]{widget},context);
+        // Rotate pixel centres clockwise around (21, 22), including the cleared region.
+        for(int y=0;y<44;y++)for(int x=0;x<44;x++) {
+            int localX=21+y-22,localY=22+21-x-1;
+            bool expected=localX<0||localX>=44||localY<0||localY>=44||flat.GetPixel(localX,localY);
+            Check(turned.GetPixel(x,y)==expected,"quarter turn rotates the widget and its background around the centre");
+        }
+        widget.Rotation=45;
+        MonoFrame diagonal=WidgetRenderer.Render(background,new[]{widget},context);
+        Check(!diagonal.Buffer.SequenceEqual(flat.Buffer)&&!diagonal.Buffer.SequenceEqual(turned.Buffer),
+            "a non-right angle changes the packed pixels");
+        var project=new ScreenProject {Width=44,Height=44,Widgets=new List<ScreenWidget>{widget}};
+        var file=Path.Combine(directory,"rotated.g9screen.json");
+        project.Save(file);
+        var saved=ScreenProject.Load(file);
+        Check(saved.Widgets[0].Rotation==45&&saved.Render(context).Buffer.SequenceEqual(project.Render(context).Buffer),
+            "a non-right angle survives project save and renders");
+        var serializer=new System.Web.Script.Serialization.JavaScriptSerializer();
+        Check(serializer.Deserialize<ScreenWidget>("{\"Width\":18,\"Height\":8}").Rotation==0,"older widgets default to zero rotation");
+        widget.Rotation=360;
+        bool rejected=false;
+        try {widget.Validate();}catch(InvalidDataException){rejected=true;}
+        Check(rejected,"rotation outside the supported range is rejected");
+    }
     static void PositionedImage(string directory) {
         string file=Path.Combine(directory,"layer.png");using(var bitmap=Solid(2,2,Color.White))bitmap.Save(file,ImageFormat.Png);
         var project=new ScreenProject {Width=4,Height=3,ImageFile=file,ImageX=2,ImageY=1,ImageWidth=2,ImageHeight=2,Composition=CompositionMode.Image};
@@ -160,7 +193,7 @@ internal static class ScreenTests {
     }
     static int Main() {
         string directory=Path.Combine(Path.GetTempPath(),"G9ScreenTests-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(directory);
-        try {Packing();Preview();Conversion();Resize();Widgets();BatteryWidget();PortableProject(directory);PositionedImage(directory);ImageLayerOrder(directory);Console.WriteLine("PASS "+assertions+" screen checks: pixel packing,28-row padding, preview, threshold/dither, fit/crop, widgets, portable projects and positioned image clipping");return 0;}
+        try {Packing();Preview();Conversion();Resize();Widgets();BatteryWidget();RotatedWidget(directory);PortableProject(directory);PositionedImage(directory);ImageLayerOrder(directory);Console.WriteLine("PASS "+assertions+" screen checks: pixel packing,28-row padding, preview, threshold/dither, fit/crop, widgets, rotation, portable projects and positioned image clipping");return 0;}
         catch(Exception e){Console.Error.WriteLine("FAIL "+e);return 1;}
         finally {if(Directory.Exists(directory))Directory.Delete(directory,true);}
     }

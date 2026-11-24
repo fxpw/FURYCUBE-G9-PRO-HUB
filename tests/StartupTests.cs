@@ -100,7 +100,14 @@ internal static class StartupTests {
             Check(!preferences.ResumeOled&&!Directory.Exists(directory),"missing resume preference defaults off without creating directory");
             preferences.SetResumeOled(true);Check(preferences.ResumeOled,"explicit resume preference saved");
             File.WriteAllText(path,"{\"schemaVersion\":1,\"resumeOled\":true,\"future\":{\"theme\":\"dark\"}}");
+            int seconds;bool idle;preferences.ReadOledSchedule(out seconds,out idle);
+            Check(seconds==1&&!idle,"existing preferences keep the previous OLED cadence");
+            preferences.SetOledSchedule(3600,true);
+            new G9BackgroundPreferences(path).ReadOledSchedule(out seconds,out idle);
+            Check(seconds==3600&&idle&&preferences.ResumeOled,"OLED schedule persists independently of resume at startup");
             preferences.SetResumeOled(false);Check(!preferences.ResumeOled&&File.ReadAllText(path).Contains("\"future\":{\"theme\":\"dark\"}"),"unrelated preferences survive explicit update");
+            preferences.ReadOledSchedule(out seconds,out idle);
+            Check(seconds==3600&&idle,"saving the startup preference retains the OLED schedule");
             string before=File.ReadAllText(path);preferences.SetResumeOled(false);Check(File.ReadAllText(path)==before,"idempotent preference save preserves bytes");
             foreach(string invalid in new[]{"{","null","{}","{\"schemaVersion\":2,\"resumeOled\":true}","{\"schemaVersion\":1,\"resumeOled\":\"true\"}",new string('x',32769)}) {
                 File.WriteAllText(path,invalid);bool failed=false;try{preferences.SetResumeOled(true);}catch(InvalidDataException){failed=true;}

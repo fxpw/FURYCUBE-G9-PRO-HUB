@@ -16,7 +16,7 @@ internal sealed partial class G9ScreenEditor {
         if(lastUploadError!=null)throw new InvalidOperationException(lastUploadError.Message,lastUploadError);
         if(enableLive&&!IsLive)throw new InvalidOperationException("Автообновление OLED остановлено.");
     }
-    internal object VueState() {return new {project=G9WebApi.Json().DeserializeObject(CaptureProjectJson()),pngBase64=PreviewPngDataUrl(),status=oledNote,live=IsLive,widgetNames=Names};}
+    internal object VueState() {return new {project=G9WebApi.Json().DeserializeObject(CaptureProjectJson()),pngBase64=PreviewPngDataUrl(),status=oledNote,live=IsLive,intervalSeconds=LiveIntervalSeconds,waitForIdle=LiveWaitForIdle,widgetNames=Names};}
     internal void VueDialog(string action,bool english=false) {
         Func<string,string,string> label=(ru,en)=>english?en:ru;
         switch(action) {

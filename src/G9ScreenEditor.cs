@@ -53,12 +53,18 @@ internal sealed partial class G9ScreenEditor : UserControl {
     OledRuntimeStatus runtimeStatus;
     Button upload;
     readonly CheckBox live=new CheckBox {Text="Обновлять OLED автоматически",AutoSize=true};
+    readonly NumericUpDown liveInterval=new NumericUpDown {Minimum=1,Maximum=86400,Value=1,Width=72,ThousandsSeparator=true};
+    readonly CheckBox liveWaitForIdle=new CheckBox {Text="Ждать паузы во вводе",AutoSize=true};
+    readonly Action<int,bool> saveLiveSchedule;
+    readonly Func<TimeSpan> elapsed;
+    TimeSpan? lastLiveUpdate;
     bool uploading;
     bool transportAvailable=true;
     bool radioTransport;
     int transportEpoch,uploadSerial;
     string oledNote="OLED поддерживает USB с OL4 и новее и 2.4G с OL9, OLA, OLB, OLD или OLE на профиле 1. Живые данные обновляются, пока HUB открыт.";
     readonly GeometrySlider xSlider=new GeometrySlider("X — отступ слева"),ySlider=new GeometrySlider("Y — отступ сверху"),widthSlider=new GeometrySlider("Ширина блока"),heightSlider=new GeometrySlider("Высота блока"),fontSlider=new GeometrySlider("Размер шрифта");
+    readonly GeometrySlider rotationSlider=new GeometrySlider("Поворот виджета","°");
     readonly TabControl editingTabs=new TabControl {Dock=DockStyle.Fill};
     readonly string autosaveFile;
     readonly string resumeFrameFile;
@@ -84,11 +90,14 @@ internal sealed partial class G9ScreenEditor : UserControl {
     sealed class GeometrySlider:Panel {
         internal readonly TrackBar Track=new TrackBar {Dock=DockStyle.Bottom,Height=24,AutoSize=false,TickStyle=TickStyle.None,SmallChange=1,LargeChange=5};
         readonly Label caption=new Label {Dock=DockStyle.Top,Height=20};
-        readonly string title;
-        internal GeometrySlider(string value){title=value;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
-        internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+" px";}
+        readonly string title,unit;
+        internal GeometrySlider(string value,string unit=" px"){title=value;this.unit=unit;Height=49;Dock=DockStyle.Top;Margin=new Padding(0,1,0,3);Controls.Add(Track);Controls.Add(caption);}
+        internal void Sync(int minimum,int maximum,int value,bool available){maximum=Math.Max(minimum,maximum);Track.Minimum=minimum;Track.Maximum=maximum;Track.Value=Math.Max(minimum,Math.Min(maximum,value));Track.Enabled=available&&maximum>minimum;caption.Text=title+": "+Track.Value+unit;}
     }
-    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null,Func<byte[],Task<string>> liveFrameSender=null,Func<byte[],Task<string>> liveDeltaSender=null){
+    internal G9ScreenEditor(Action<string> logger,Func<byte[],Task<string>> frameSender=null,Func<Task<OledRuntimeStatus>> runtimeStatusReader=null,string savedEditorFile=null,bool backgroundServices=true,Func<TelemetrySnapshot,int?> cachedRadioDpiReader=null,Func<byte[],Task<string>> liveFrameSender=null,Func<byte[],Task<string>> liveDeltaSender=null,Action<int,bool> saveLiveSchedule=null,Func<TimeSpan> elapsed=null){
+        this.saveLiveSchedule=saveLiveSchedule;
+        var clock=System.Diagnostics.Stopwatch.StartNew();
+        this.elapsed=elapsed??(()=>clock.Elapsed);
         report=logger;sendFrame=frameSender;sendLiveFrame=liveFrameSender;sendLiveDeltaFrame=liveDeltaSender;readRuntimeStatus=runtimeStatusReader;readCachedRadioDpi=cachedRadioDpiReader;Dock=DockStyle.Fill;Padding=new Padding(10);BackColor=Color.FromArgb(244,246,249);
         backgroundServicesEnabled=backgroundServices;
         autosaveFile=savedEditorFile??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"FURYCUBE-G9-PRO","editor","autosave.g9screen.json");
@@ -114,6 +123,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         AddButton(second,"Экспорт .bin",ExportFrame,"Сохранить упакованный кадр для дальнейшей работы с устройством.");
         upload=AddButton(second,"На OLED",async delegate{await UploadFrame();},"Проверить совместимость и передать текущий кадр. Для автоматического обновления включи живой режим.");upload.Enabled=sendFrame!=null;
         var third=Flow();third.Controls.Add(live);live.Enabled=sendFrame!=null;tips.SetToolTip(live,"Для живых часов и показателей ПК. HUB должен работать. При ошибке обновление выключается. Возобновление при запуске включается отдельной настройкой HUB.");
+        third.Controls.Add(Caption("Интервал обновления (с)"));third.Controls.Add(liveInterval);third.Controls.Add(liveWaitForIdle);
         toolbar.Controls.Add(first);toolbar.Controls.Add(second);toolbar.Controls.Add(third);
         var split=new SplitContainer {Size=new Size(1040,440),Dock=DockStyle.Fill,Orientation=Orientation.Vertical,Panel1MinSize=300,Panel2MinSize=300,SplitterDistance=670,FixedPanel=FixedPanel.Panel2};
         var left=new Panel {Dock=DockStyle.Fill};
@@ -143,7 +153,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
         var geometryTab=new TabPage("Положение и размер") {Padding=new Padding(8),AutoScroll=true};
         var geometryFields=new TableLayoutPanel {Dock=DockStyle.Top,AutoSize=true,ColumnCount=1};geometryFields.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
         AddField(geometryFields,new Label {AutoSize=true,MaximumSize=new Size(300,0),Text="Пиксели экрана. Положение не зависит от размера: блок можно сдвинуть за край."});
-        foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,fontSlider})AddField(geometryFields,slider);
+        foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,rotationSlider,fontSlider})AddField(geometryFields,slider);
         var alignment=Flow();alignment.WrapContents=true;
         AddButton(alignment,"По центру",CenterLayer,"Расположить выбранный блок в центре экрана.");AddButton(alignment,"Во всю ширину",FillWidth,"Занять ширину экрана, сохранив высоту блока.");AddButton(alignment,"Во весь экран",FillCanvas,"Разместить выбранный блок в области всего экрана.");AddField(geometryFields,alignment);geometryTab.Controls.Add(geometryFields);
         editingTabs.TabPages.Add(contentTab);editingTabs.TabPages.Add(geometryTab);right.Controls.Add(editingTabs);right.Controls.Add(layerGroup);split.Panel2.Controls.Add(right);
@@ -170,16 +180,18 @@ internal sealed partial class G9ScreenEditor : UserControl {
         text.TextChanged+=delegate{ScreenWidget w=SelectedWidget();if(!syncing&&w!=null&&w.Kind==WidgetKind.Text){w.Text=text.Text;Changed();}};
         clockFormat.SelectedIndexChanged+=delegate{ScreenWidget w=SelectedWidget();ClockChoice choice=clockFormat.SelectedItem as ClockChoice;if(!syncing&&w!=null&&w.Kind==WidgetKind.Clock&&choice!=null){w.Format=choice.Value;Changed();}};
         bold.CheckedChanged+=delegate{WidgetStyleChanged();};showLabel.CheckedChanged+=delegate{WidgetStyleChanged();};lit.CheckedChanged+=delegate{WidgetStyleChanged();};clearBackground.CheckedChanged+=delegate{WidgetStyleChanged();};
-        foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,fontSlider})slider.Track.ValueChanged+=delegate(object sender,EventArgs e){GeometryChanged((TrackBar)sender);};
+        foreach(var slider in new[]{xSlider,ySlider,widthSlider,heightSlider,rotationSlider,fontSlider})slider.Track.ValueChanged+=delegate(object sender,EventArgs e){GeometryChanged((TrackBar)sender);};
         preview.Paint+=DrawSelection;preview.MouseDown+=StartDrag;preview.MouseMove+=MoveDrag;preview.MouseUp+=delegate{dragging=false;preview.Capture=false;};preview.Resize+=delegate{Render();};
         timer.Tick+=async delegate {
             await RefreshSensors();
             if(IsDisposed||disposedEditor)return;
             if(radioTransport)await CheckRadioRestore(telemetry.Snapshot,RadioOledInputPriority.IsDesktopIdle());
-            if(live.Checked)await UploadFrame(background:true,quiet:true);
+            await CheckLiveUpdate(!liveWaitForIdle.Checked||RadioOledInputPriority.IsDesktopIdle());
         };
         autosaveTimer.Tick+=delegate{autosaveTimer.Stop();SaveAutosave();};
-        live.CheckedChanged+=async delegate{if(syncing)return;if(live.Checked)await UploadFrame(background:true);else{resumeFrame.Freeze();SaveResumeFrame();}};
+        live.CheckedChanged+=async delegate{if(syncing)return;if(live.Checked)await StartLiveUpdates();else{resumeFrame.Freeze();SaveResumeFrame();}};
+        liveInterval.ValueChanged+=delegate{SaveNativeLiveSchedule();};
+        liveWaitForIdle.CheckedChanged+=delegate{SaveNativeLiveSchedule();};
     }
     LayerItem SelectedLayer(){return layers.SelectedItem as LayerItem;}
     ScreenWidget SelectedWidget(){LayerItem selected=SelectedLayer();return selected==null?null:selected.Widget;}
@@ -230,13 +242,14 @@ internal sealed partial class G9ScreenEditor : UserControl {
         Rectangle bounds=LayerBounds();ScreenWidget w=SelectedWidget();bool available=SelectedLayer()!=null;syncingGeometry=true;
         try{xSlider.Sync(Math.Min(0,bounds.X),Math.Max(project.Width-1,bounds.X),bounds.X,available);ySlider.Sync(Math.Min(0,bounds.Y),Math.Max(project.Height-1,bounds.Y),bounds.Y,available);
             widthSlider.Sync(1,Math.Max(project.Width,bounds.Width),Math.Max(1,bounds.Width),available);heightSlider.Sync(1,Math.Max(project.Height,bounds.Height),Math.Max(1,bounds.Height),available);
+            rotationSlider.Sync(0,359,w==null?0:w.Rotation,w!=null);
             fontSlider.Sync(4,Math.Max(4,Math.Max(project.Height,w==null?9:(int)Math.Ceiling(w.FontSize))),w==null?9:(int)Math.Round(w.FontSize),w!=null&&w.Kind!=WidgetKind.BatteryIndicator);
         }finally{syncingGeometry=false;}
     }
     void GeometryChanged(TrackBar source){
         if(syncingGeometry||syncing||SelectedLayer()==null)return;
         if(ImageSelected()){if(source==xSlider.Track)project.ImageX=source.Value;else if(source==ySlider.Track)project.ImageY=source.Value;else if(source==widthSlider.Track)project.ImageWidth=source.Value;else if(source==heightSlider.Track)project.ImageHeight=source.Value;}
-        else{ScreenWidget w=SelectedWidget();if(w==null)return;if(source==xSlider.Track)w.X=source.Value;else if(source==ySlider.Track)w.Y=source.Value;else if(source==widthSlider.Track)w.Width=source.Value;else if(source==heightSlider.Track)w.Height=source.Value;else if(source==fontSlider.Track)w.FontSize=source.Value;}
+        else{ScreenWidget w=SelectedWidget();if(w==null)return;if(source==xSlider.Track)w.X=source.Value;else if(source==ySlider.Track)w.Y=source.Value;else if(source==widthSlider.Track)w.Width=source.Value;else if(source==heightSlider.Track)w.Height=source.Value;else if(source==fontSlider.Track)w.FontSize=source.Value;else if(source==rotationSlider.Track)w.Rotation=source.Value;}
         SyncGeometry();Changed();
     }
     void SetBounds(Rectangle bounds){if(ImageSelected()){project.ImageX=bounds.X;project.ImageY=bounds.Y;project.ImageWidth=bounds.Width;project.ImageHeight=bounds.Height;}else{ScreenWidget w=SelectedWidget();if(w==null)return;w.X=bounds.X;w.Y=bounds.Y;w.Width=bounds.Width;w.Height=bounds.Height;}SyncGeometry();Changed();}
@@ -245,10 +258,44 @@ internal sealed partial class G9ScreenEditor : UserControl {
     void FillCanvas(){if(SelectedLayer()!=null)SetBounds(new Rectangle(0,0,project.Width,project.Height));}
     Point CanvasOrigin(){return preview.Image==null?Point.Empty:new Point((preview.ClientSize.Width-preview.Image.Width)/2,(preview.ClientSize.Height-preview.Image.Height)/2);}
     Point CanvasPoint(Point location){Point origin=CanvasOrigin();return new Point((int)Math.Floor((location.X-origin.X)/(double)previewScale),(int)Math.Floor((location.Y-origin.Y)/(double)previewScale));}
-    void DrawSelection(object sender,PaintEventArgs e){if(SelectedLayer()==null||preview.Image==null)return;Rectangle b=LayerBounds();Point origin=CanvasOrigin();var state=e.Graphics.Save();try{e.Graphics.SetClip(new Rectangle(origin,preview.Image.Size));using(var pen=new Pen(Color.FromArgb(255,147,65),2)){pen.DashStyle=System.Drawing.Drawing2D.DashStyle.Dash;e.Graphics.DrawRectangle(pen,origin.X+b.X*previewScale,origin.Y+b.Y*previewScale,Math.Max(1,b.Width*previewScale-1),Math.Max(1,b.Height*previewScale-1));}}finally{e.Graphics.Restore(state);}}
+    void DrawSelection(object sender,PaintEventArgs e) {
+        if(SelectedLayer()==null||preview.Image==null)return;
+        Rectangle layer=LayerBounds();
+        Point origin=CanvasOrigin();
+        var bounds=new Rectangle(origin.X+layer.X*previewScale,origin.Y+layer.Y*previewScale,
+            layer.Width*previewScale,layer.Height*previewScale);
+        var state=e.Graphics.Save();
+        try {
+            e.Graphics.SetClip(new Rectangle(origin,preview.Image.Size));
+            ScreenWidget widget=SelectedWidget();
+            if(widget!=null&&widget.Rotation!=0)
+                using(var transform=widget.CreateRotationTransform(bounds))e.Graphics.MultiplyTransform(transform);
+            using(var pen=new Pen(Color.FromArgb(255,147,65),2)) {
+                pen.DashStyle=System.Drawing.Drawing2D.DashStyle.Dash;
+                e.Graphics.DrawRectangle(pen,bounds.X,bounds.Y,Math.Max(1,bounds.Width-1),Math.Max(1,bounds.Height-1));
+            }
+        } finally {e.Graphics.Restore(state);}
+    }
+    bool LayerContains(LayerItem item,Point point) {
+        if(item==null)return false;
+        if(item.Image)return new Rectangle(project.ImageX,project.ImageY,ImageWidth(),ImageHeight()).Contains(point);
+        ScreenWidget widget=item.Widget;
+        var bounds=new RectangleF(widget.X,widget.Y,widget.Width,widget.Height);
+        var hit=new[]{new PointF(point.X+0.5f,point.Y+0.5f)};
+        if(widget.Rotation!=0)using(var transform=widget.CreateRotationTransform(bounds)) {
+            transform.Invert();
+            transform.TransformPoints(hit);
+        }
+        return bounds.Contains(hit[0]);
+    }
     void StartDrag(object sender,MouseEventArgs e){
         if(e.Button!=MouseButtons.Left||current==null)return;Point p=CanvasPoint(e.Location);if(p.X<0||p.Y<0||p.X>=project.Width||p.Y>=project.Height)return;
-        if(SelectedLayer()==null||!LayerBounds().Contains(p)){bool found=false;for(int i=layers.Items.Count-1;i>=0;i--){LayerItem item=(LayerItem)layers.Items[i];Rectangle b=item.Image?new Rectangle(project.ImageX,project.ImageY,ImageWidth(),ImageHeight()):new Rectangle(item.Widget.X,item.Widget.Y,item.Widget.Width,item.Widget.Height);if(b.Contains(p)){layers.SelectedIndex=i;found=true;break;}}if(!found)return;}
+        if(!LayerContains(SelectedLayer(),p)) {
+            int index=layers.Items.Count-1;
+            while(index>=0&&!LayerContains((LayerItem)layers.Items[index],p))index--;
+            if(index<0)return;
+            layers.SelectedIndex=index;
+        }
         Rectangle selected=LayerBounds();dragOffset=new Point(p.X-selected.X,p.Y-selected.Y);dragging=true;preview.Capture=true;
     }
     void MoveDrag(object sender,MouseEventArgs e){if(!dragging||SelectedLayer()==null)return;Point p=CanvasPoint(e.Location);Rectangle b=LayerBounds();b.X=Math.Max(0,Math.Min(project.Width-1,p.X-dragOffset.X));b.Y=Math.Max(0,Math.Min(project.Height-1,p.Y-dragOffset.Y));SetBounds(b);}
@@ -307,6 +354,46 @@ internal sealed partial class G9ScreenEditor : UserControl {
         }catch(Exception e){current=null;info.Text="Не удалось отрисовать: "+e.Message;}
     }
     const string WaitingForInputIdle="Обновление OLED по 2.4G ждёт паузы во вводе.";
+    internal int LiveIntervalSeconds {get {return liveIntervalSeconds;}}
+    internal bool LiveWaitForIdle {get {return waitForIdle;}}
+    int liveIntervalSeconds=1;
+    bool waitForIdle;
+
+    internal void SetLiveSchedule(int seconds,bool idle,bool persist=true){
+        if(seconds<1||seconds>86400)throw new ArgumentOutOfRangeException("seconds");
+        if(persist&&saveLiveSchedule!=null)saveLiveSchedule(seconds,idle);
+        liveIntervalSeconds=seconds;waitForIdle=idle;
+        SyncLiveSchedule();
+    }
+
+    void SyncLiveSchedule(){
+        bool previous=syncing;syncing=true;
+        try{liveInterval.Value=liveIntervalSeconds;liveWaitForIdle.Checked=waitForIdle;}
+        finally{syncing=previous;}
+    }
+
+    void SaveNativeLiveSchedule(){
+        if(syncing)return;
+        try{SetLiveSchedule((int)liveInterval.Value,liveWaitForIdle.Checked);}
+        catch(Exception error){SyncLiveSchedule();Log("Не удалось сохранить расписание OLED: "+error.Message);}
+    }
+
+    internal Task CheckLiveUpdate(bool desktopIdle,bool quiet=true){
+        if(disposedEditor||IsDisposed||!live.Checked||!transportAvailable||uploading)return Task.FromResult(0);
+        if(!forceFullRadioRefresh&&liveIntervalSeconds>1&&lastLiveUpdate.HasValue&&elapsed()-lastLiveUpdate.Value<TimeSpan.FromSeconds(liveIntervalSeconds))return Task.FromResult(0);
+        if(waitForIdle&&!desktopIdle){
+            const string waiting="Обновление OLED ждёт паузы во вводе.";
+            if(oledNote!=waiting){oledNote=waiting;Render();}
+            return Task.FromResult(0);
+        }
+        return UploadFrame(background:true,quiet:quiet);
+    }
+
+    Task StartLiveUpdates(){
+        lastLiveUpdate=null;lastUploadError=null;
+        return CheckLiveUpdate(!waitForIdle||RadioOledInputPriority.IsDesktopIdle(),quiet:false);
+    }
+
     async Task UploadFrame(bool background=false,bool quiet=false){
         if(uploading||sendFrame==null||!transportAvailable)return;
         pendingStaticRadioResume=false;Render();if(current==null)return;
@@ -335,6 +422,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
             string sent=await sender(pixels);
             if(IsDisposed||disposedEditor||epoch!=transportEpoch)return;
             if(prioritizeInput&&sent==null){oledNote=usePartial?"Обновление OLED по 2.4G ожидает завершения передачи.":WaitingForInputIdle;return;}
+            if(background&&live.Checked)lastLiveUpdate=elapsed();
             if(!usePartial)forceFullRadioRefresh=false;
             oledNote=sent;
             resumeFrame.Remember(pixels,live.Checked);resumeFrameInvalid=false;displayOwnedThisRun=true;SaveResumeFrame();
@@ -376,7 +464,7 @@ internal sealed partial class G9ScreenEditor : UserControl {
     internal async Task ResumeLive() {
         if(IsDisposed||disposedEditor||!transportAvailable||sendFrame==null)return;
         bool previous=syncing;syncing=true;try {live.Checked=true;}finally {syncing=previous;}
-        await UploadFrame(background:true);
+        await StartLiveUpdates();
     }
     void SaveResumeFrame(){try{resumeFrame.Save(resumeFrameFile);}catch(Exception error){Log("Кадр отправлен, но его копия на ПК не сохранена: "+error.Message);}}
     internal async Task ResumeDisplay() {
